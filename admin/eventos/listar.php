@@ -262,6 +262,15 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
         .btn-secondary:hover {
             background: #5a6268;
         }
+        .btn-plantillas {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.btn-plantillas:hover {
+    background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
+    transform: translateY(-1px);
+}
         
         .card {
             background: white;
@@ -590,10 +599,11 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
                                     </td>
                                     <td>
                                         <div class="actions">
-                                            <a href="editar.php?id=<?php echo $evento['id']; ?>" class="btn-sm btn-edit">Editar</a>
-                                            <a href="../participantes/listar.php?evento_id=<?php echo $evento['id']; ?>" class="btn-sm btn-view">Ver Participantes</a>
+                                            <a href="editar.php?id=<?php echo $evento['id']; ?>" class="btn-sm btn-edit">✏️ Editar</a>
+                                            <a href="plantillas.php?evento_id=<?php echo $evento['id']; ?>" class="btn-sm btn-plantillas">🎨 Plantillas</a>
+                                            <a href="../participantes/listar.php?evento_id=<?php echo $evento['id']; ?>" class="btn-sm btn-view">👥 Participantes</a>
                                             <?php if ($_SESSION['rol'] === 'admin'): ?>
-                                                <a href="?eliminar=<?php echo $evento['id']; ?>" class="btn-sm btn-delete" onclick="return confirm('¿Está seguro de eliminar este evento?')">Eliminar</a>
+                                                <a href="?eliminar=<?php echo $evento['id']; ?>" class="btn-sm btn-delete" onclick="return confirm('¿Está seguro de eliminar este evento?')">🗑️ Eliminar</a>
                                             <?php endif; ?>
                                         </div>
                                     </td>
