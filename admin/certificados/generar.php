@@ -1,254 +1,47 @@
 <?php
-// admin/certificados/generar.php - VERSIÓN COMPLETA MEJORADA
+// admin/certificados/generar.php - CORREGIDO SIN FUNCIÓN DUPLICADA
 require_once '../../config/config.php';
 require_once '../../includes/funciones.php';
-require_once '../../includes/funciones_svg.php';
+require_once '../../includes/funciones_svg.php'; // Incluir funciones SVG
 
 verificarAutenticacion();
 
 $error = '';
 $success = '';
-$participante_individual = null;
-$estadisticas_evento = null;
+$generando = false;
 
-// Si viene un participante específico por URL
-if (isset($_GET['participante_id'])) {
-    $participante_id = intval($_GET['participante_id']);
-    
-    try {
-        $db = Database::getInstance()->getConnection();
-        $stmt = $db->prepare("
-            SELECT p.*, e.nombre as evento_nombre, e.fecha_inicio, e.fecha_fin,
-                   e.entidad_organizadora, e.modalidad, e.lugar, e.horas_duracion,
-                   (SELECT COUNT(*) FROM certificados c WHERE c.participante_id = p.id) as tiene_certificado
-            FROM participantes p 
-            JOIN eventos e ON p.evento_id = e.id 
-            WHERE p.id = ?
-        ");
-        $stmt->execute([$participante_id]);
-        $participante_individual = $stmt->fetch();
-        
-        if (!$participante_individual) {
-            $error = "Participante no encontrado";
-        } elseif ($participante_individual['tiene_certificado'] > 0) {
-            // Obtener código del certificado existente
-            $stmt = $db->prepare("SELECT codigo_verificacion FROM certificados WHERE participante_id = ?");
-            $stmt->execute([$participante_id]);
-            $certificado_existente = $stmt->fetch();
-            $error = "Este participante ya tiene un certificado generado con código: " . $certificado_existente['codigo_verificacion'];
-        }
-    } catch (Exception $e) {
-        $error = "Error al cargar el participante: " . $e->getMessage();
-    }
-}
-
-// Obtener lista de eventos para el filtro
+// Obtener lista de eventos activos
 try {
     $db = Database::getInstance()->getConnection();
-    $stmt = $db->query("
-        SELECT e.id, e.nombre, e.fecha_inicio, e.fecha_fin,
-               COUNT(DISTINCT p.id) as total_participantes,
-               COUNT(DISTINCT c.id) as total_certificados,
-               COUNT(DISTINCT pt.id) as tiene_plantillas
-        FROM eventos e 
-        LEFT JOIN participantes p ON e.id = p.evento_id
-        LEFT JOIN certificados c ON p.id = c.participante_id
-        LEFT JOIN plantillas_certificados pt ON e.id = pt.evento_id
-        GROUP BY e.id, e.nombre, e.fecha_inicio, e.fecha_fin
-        ORDER BY e.fecha_inicio DESC
-    ");
+    $stmt = $db->query("SELECT id, nombre, fecha_inicio, fecha_fin FROM eventos WHERE estado = 'activo' ORDER BY fecha_inicio DESC");
     $eventos = $stmt->fetchAll();
 } catch (Exception $e) {
     $error = "Error al cargar eventos: " . $e->getMessage();
 }
 
-// Obtener estadísticas si hay un evento seleccionado
-if (isset($_GET['evento_id']) && !$_POST) {
-    $evento_id_stats = intval($_GET['evento_id']);
-    $estadisticas_evento = obtenerEstadisticasEvento($evento_id_stats);
-}
-
-if ($_POST) {
-    $accion = $_POST['accion'];
+// Procesar formulario
+if ($_POST && isset($_POST['evento_id'])) {
     $evento_id = intval($_POST['evento_id']);
     
     if (empty($evento_id)) {
-        $error = 'Debe seleccionar un evento';
+        $error = 'Por favor, seleccione un evento';
     } else {
-        try {
-            set_time_limit(300); // 5 minutos para generación masiva
-            
-            if ($accion === 'generar_individual' && isset($_POST['participante_id'])) {
-                // Generar certificado individual
-                $participante_id = intval($_POST['participante_id']);
-                $resultado = generarCertificadoIndividual($participante_id);
-                
-                if ($resultado['success']) {
-                    $tipo_archivo = $resultado['tipo'] ?? 'pdf';
-                    $icono_tipo = $tipo_archivo === 'svg' ? '🎨' : '📄';
-                    
-                    $success = "✅ <strong>Certificado {$tipo_archivo} generado exitosamente</strong><br>" .
-                              "👤 <strong>Participante:</strong> " . $resultado['participante'] . "<br>" .
-                              "🔑 <strong>Código:</strong> " . $resultado['codigo'] . "<br>" .
-                              "{$icono_tipo} <strong>Archivo:</strong> " . $resultado['archivo'];
-                              
-                    if (isset($resultado['dimensiones'])) {
-                        $success .= "<br>📏 <strong>Dimensiones:</strong> {$resultado['dimensiones']['ancho']}x{$resultado['dimensiones']['alto']}px";
-                    }
-                    
-                    if (isset($resultado['url_descarga'])) {
-                        $success .= "<br><a href='{$resultado['url_descarga']}' target='_blank' class='btn-download'>📥 Descargar Certificado</a>";
-                    }
-                } else {
-                    $error = $resultado['error'];
-                }
-                
-            } elseif ($accion === 'generar_masivo') {
-                // Generar certificados masivos para el evento
-                $resultado = generarCertificadosMasivos($evento_id);
-                
-                if ($resultado['success']) {
-                    $success = "✅ <strong>Generación masiva completada:</strong><br>" .
-                              "📊 <strong>{$resultado['generados']}</strong> certificados generados<br>" .
-                              "⚠️ <strong>{$resultado['errores']}</strong> errores<br>" .
-                              "⏱️ <strong>Tiempo:</strong> {$resultado['tiempo']} segundos";
-                              
-                    if (isset($resultado['tipos_generados'])) {
-                        $success .= "<br>🎨 <strong>SVG:</strong> {$resultado['tipos_generados']['svg']} | 📄 <strong>PDF:</strong> {$resultado['tipos_generados']['pdf']}";
-                    }
-                              
-                    if (!empty($resultado['detalles_errores']) && count($resultado['detalles_errores']) <= 5) {
-                        $success .= "<br><br><strong>Errores detallados:</strong><br>";
-                        foreach ($resultado['detalles_errores'] as $error_det) {
-                            $success .= "• " . htmlspecialchars($error_det) . "<br>";
-                        }
-                    }
-                } else {
-                    $error = $resultado['error'];
-                }
-            }
-            
-        } catch (Exception $e) {
-            $error = 'Error durante la generación: ' . $e->getMessage();
-        }
-    }
-}
-
-// FUNCIONES MEJORADAS PARA GENERACIÓN DE CERTIFICADOS
-
-function generarCertificadoIndividual($participante_id) {
-    $tiempo_inicio = microtime(true);
-    
-    try {
-        $db = Database::getInstance()->getConnection();
+        $generando = true;
         
-        // Obtener datos del participante y evento
-        $stmt = $db->prepare("
-            SELECT 
-                p.*,
-                e.id as evento_id,
-                e.nombre as evento_nombre,
-                e.fecha_inicio,
-                e.fecha_fin,
-                e.entidad_organizadora,
-                e.modalidad,
-                e.lugar,
-                e.horas_duracion,
-                e.descripcion
-            FROM participantes p
-            JOIN eventos e ON p.evento_id = e.id
-            WHERE p.id = ?
-        ");
-        $stmt->execute([$participante_id]);
-        $participante = $stmt->fetch();
+        // Generar certificados para el evento seleccionado
+        $resultado = generarCertificadosEvento($evento_id);
         
-        if (!$participante) {
-            return ['success' => false, 'error' => 'Participante no encontrado'];
-        }
-        
-        // Verificar si ya existe certificado
-        $stmt = $db->prepare("SELECT id, codigo_verificacion, archivo_pdf FROM certificados WHERE participante_id = ?");
-        $stmt->execute([$participante_id]);
-        $certificado_existe = $stmt->fetch();
-        
-        if ($certificado_existe) {
-            return [
-                'success' => false, 
-                'error' => 'El participante ya tiene un certificado generado con código: ' . $certificado_existe['codigo_verificacion']
-            ];
-        }
-        
-        // Generar código único
-        $codigo_verificacion = generarCodigoUnico();
-        
-        // Crear hash de validación mejorado
-        $hash_validacion = generarHashValidacion($participante, $codigo_verificacion);
-        
-        // Verificar plantillas disponibles
-        $plantilla_info = obtenerPlantillaDisponible($participante['evento_id'], $participante['rol']);
-        
-        if ($plantilla_info['tiene_plantilla']) {
-            // Generar certificado SVG con plantilla
-            $resultado_certificado = generarCertificadoConPlantillaSVG($participante, $codigo_verificacion, $plantilla_info['plantilla']);
+        if ($resultado['success']) {
+            $success = $resultado['mensaje'];
         } else {
-            // Generar certificado PDF básico
-            $resultado_certificado = generarPDFCertificadoBasico($participante, $codigo_verificacion);
+            $error = $resultado['error'];
         }
         
-        if (!$resultado_certificado['success']) {
-            return ['success' => false, 'error' => 'Error al generar certificado: ' . $resultado_certificado['error']];
-        }
-        
-        // Insertar registro en la base de datos
-        $stmt = $db->prepare("
-            INSERT INTO certificados (participante_id, evento_id, codigo_verificacion, archivo_pdf, hash_validacion, tipo_archivo, dimensiones, estado, fecha_generacion)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'generado', NOW())
-        ");
-        
-        $tipo_archivo = $resultado_certificado['tipo'] ?? 'pdf';
-        $dimensiones_json = isset($resultado_certificado['dimensiones']) ? json_encode($resultado_certificado['dimensiones']) : null;
-        
-        $stmt->execute([
-            $participante_id,
-            $participante['evento_id'],
-            $codigo_verificacion,
-            $resultado_certificado['nombre_archivo'],
-            $hash_validacion,
-            $tipo_archivo,
-            $dimensiones_json
-        ]);
-        
-        $certificado_id = $db->lastInsertId();
-        
-        // Registrar en auditoría
-        registrarAuditoria('GENERAR_CERTIFICADO', 'certificados', $certificado_id, null, [
-            'participante_id' => $participante_id,
-            'codigo_verificacion' => $codigo_verificacion,
-            'tipo' => $tipo_archivo,
-            'tiempo_generacion' => round(microtime(true) - $tiempo_inicio, 3),
-            'plantilla_utilizada' => $plantilla_info['plantilla']['nombre_plantilla'] ?? 'PDF Básico'
-        ]);
-        
-        return [
-            'success' => true,
-            'participante' => $participante['nombres'] . ' ' . $participante['apellidos'],
-            'codigo' => $codigo_verificacion,
-            'archivo' => $resultado_certificado['nombre_archivo'],
-            'tipo' => $tipo_archivo,
-            'certificado_id' => $certificado_id,
-            'dimensiones' => $resultado_certificado['dimensiones'] ?? null,
-            'url_descarga' => GENERATED_URL . 'certificados/' . $resultado_certificado['nombre_archivo']
-        ];
-        
-    } catch (Exception $e) {
-        error_log("Error generando certificado individual: " . $e->getMessage());
-        return ['success' => false, 'error' => $e->getMessage()];
+        $generando = false;
     }
 }
 
-function generarCertificadosMasivos($evento_id) {
-    $tiempo_inicio = microtime(true);
-    
+function generarCertificadosEvento($evento_id) {
     try {
         $db = Database::getInstance()->getConnection();
         
@@ -304,12 +97,13 @@ function generarCertificadosMasivos($evento_id) {
                     if ($resultado_certificado['success']) {
                         // Insertar en base de datos
                         $stmt = $db->prepare("
-                            INSERT INTO certificados (participante_id, evento_id, codigo_verificacion, archivo_pdf, hash_validacion, tipo_archivo, dimensiones, estado, fecha_generacion)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, 'generado', NOW())
+                            INSERT INTO certificados (participante_id, evento_id, codigo_verificacion, archivo_pdf, hash_validacion, tipo_archivo, dimensiones, fecha_generacion)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
                         ");
                         
                         $tipo_archivo = $resultado_certificado['tipo'] ?? 'pdf';
-                        $dimensiones_json = isset($resultado_certificado['dimensiones']) ? json_encode($resultado_certificado['dimensiones']) : null;
+                        $dimensiones_json = isset($resultado_certificado['dimensiones']) ? 
+                            json_encode($resultado_certificado['dimensiones']) : null;
                         
                         $stmt->execute([
                             $participante['id'],
@@ -324,45 +118,40 @@ function generarCertificadosMasivos($evento_id) {
                         $generados++;
                         $tipos_generados[$tipo_archivo]++;
                         
+                        // Registrar auditoría
+                        registrarAuditoria('GENERAR_CERTIFICADO', 'certificados', $db->lastInsertId(), null, [
+                            'participante_id' => $participante['id'],
+                            'codigo_verificacion' => $codigo_verificacion,
+                            'tipo_archivo' => $tipo_archivo
+                        ]);
+                        
                     } else {
                         $errores++;
-                        $detalles_errores[] = $participante['nombres'] . ' ' . $participante['apellidos'] . ': ' . $resultado_certificado['error'];
+                        $detalles_errores[] = "Error para {$participante['nombres']} {$participante['apellidos']}: " . $resultado_certificado['error'];
                     }
                     
                 } catch (Exception $e) {
                     $errores++;
-                    $detalles_errores[] = $participante['nombres'] . ' ' . $participante['apellidos'] . ': ' . $e->getMessage();
-                }
-                
-                // Pequeña pausa cada 10 certificados para no sobrecargar
-                if (($generados + $errores) % 10 == 0) {
-                    usleep(50000); // 0.05 segundos
+                    $detalles_errores[] = "Error para {$participante['nombres']} {$participante['apellidos']}: " . $e->getMessage();
                 }
             }
         }
         
-        $tiempo_total = round(microtime(true) - $tiempo_inicio, 2);
+        // Mensaje de resultado
+        $mensaje = "✅ Certificados generados exitosamente:\n";
+        $mensaje .= "• Total generados: {$generados}\n";
+        $mensaje .= "• Certificados SVG: {$tipos_generados['svg']}\n";
+        $mensaje .= "• Certificados PDF: {$tipos_generados['pdf']}\n";
         
-        // Registrar auditoría del proceso masivo
-        registrarAuditoria('GENERAR_MASIVO', 'certificados', $evento_id, null, [
-            'evento_id' => $evento_id,
-            'generados' => $generados,
-            'errores' => $errores,
-            'tiempo_total' => $tiempo_total,
-            'tipos_generados' => $tipos_generados
-        ]);
+        if ($errores > 0) {
+            $mensaje .= "\n⚠️ Errores encontrados: {$errores}\n";
+            $mensaje .= "Primeros errores:\n" . implode("\n", array_slice($detalles_errores, 0, 3));
+        }
         
-        return [
-            'success' => true,
-            'generados' => $generados,
-            'errores' => $errores,
-            'tiempo' => $tiempo_total,
-            'tipos_generados' => $tipos_generados,
-            'detalles_errores' => array_slice($detalles_errores, 0, 10) // Máximo 10 errores mostrados
-        ];
+        return ['success' => true, 'mensaje' => $mensaje];
         
     } catch (Exception $e) {
-        error_log("Error en generación masiva: " . $e->getMessage());
+        error_log("Error generando certificados: " . $e->getMessage());
         return ['success' => false, 'error' => $e->getMessage()];
     }
 }
@@ -407,14 +196,8 @@ function obtenerPlantillaDisponible($evento_id, $rol) {
     }
 }
 
-// Función actualizada para incluir número de identificación
 function generarCertificadoConPlantillaSVG($participante, $codigo_verificacion, $plantilla) {
     try {
-        // Incluir funciones SVG mejoradas
-        if (!function_exists('procesarNombresLargos')) {
-            require_once __DIR__ . '/../../includes/funciones_svg.php';
-        }
-        
         // Leer plantilla SVG
         $ruta_plantilla = TEMPLATE_PATH . $plantilla['archivo_plantilla'];
         if (!file_exists($ruta_plantilla)) {
@@ -426,7 +209,7 @@ function generarCertificadoConPlantillaSVG($participante, $codigo_verificacion, 
             throw new Exception("La plantilla SVG está vacía");
         }
         
-        // Optimizar SVG para mejor renderizado
+        // Optimizar SVG para mejor renderizado (función de funciones_svg.php)
         $contenido_svg = optimizarSVGTexto($contenido_svg);
         
         // PROCESAR NOMBRES LARGOS PRIMERO (MANEJO ESPECIAL)
@@ -521,6 +304,127 @@ function generarCertificadoConPlantillaSVG($participante, $codigo_verificacion, 
     }
 }
 
+function generarPDFCertificadoBasico($participante, $codigo_verificacion) {
+    try {
+        // Generar nombre de archivo único
+        $nombre_archivo = $codigo_verificacion . '_' . time() . '.pdf';
+        $ruta_completa = GENERATED_PATH . 'certificados/' . $nombre_archivo;
+        
+        // Asegurar que el directorio existe
+        if (!is_dir(GENERATED_PATH . 'certificados/')) {
+            mkdir(GENERATED_PATH . 'certificados/', 0755, true);
+        }
+        
+        // Generar contenido del PDF básico mejorado
+        $contenido_pdf = generarContenidoPDFMejorado($participante, $codigo_verificacion);
+        
+        // Guardar archivo
+        if (file_put_contents($ruta_completa, $contenido_pdf) === false) {
+            throw new Exception("No se pudo escribir el archivo PDF");
+        }
+        
+        return [
+            'success' => true,
+            'nombre_archivo' => $nombre_archivo,
+            'ruta_completa' => $ruta_completa,
+            'tamaño' => filesize($ruta_completa),
+            'tipo' => 'pdf'
+        ];
+        
+    } catch (Exception $e) {
+        return [
+            'success' => false,
+            'error' => $e->getMessage()
+        ];
+    }
+}
+
+function generarContenidoPDFMejorado($participante, $codigo_verificacion) {
+    // Generar texto más completo para el PDF
+    $nombre_completo = strtoupper($participante['nombres'] . ' ' . $participante['apellidos']);
+    $fecha_actual = date('d/m/Y');
+    
+    return "CERTIFICADO DE PARTICIPACIÓN
+
+UNIVERSIDAD DISTRITAL FRANCISCO JOSÉ DE CALDAS
+SISTEMA DE GESTIÓN DE PROYECTOS Y OFICINA DE EXTENSIÓN (SGPOE)
+
+Se certifica que:
+
+{$nombre_completo}
+Documento de Identidad: {$participante['numero_identificacion']}
+
+Participó exitosamente en el evento:
+
+{$participante['evento_nombre']}
+
+Realizado del " . formatearFecha($participante['fecha_inicio']) . " al " . formatearFecha($participante['fecha_fin']) . "
+Modalidad: " . ucfirst($participante['modalidad']) . "
+Lugar: " . ($participante['lugar'] ?: 'Virtual') . "
+Entidad Organizadora: {$participante['entidad_organizadora']}
+Duración: " . ($participante['horas_duracion'] ?: 'No especificada') . " horas académicas
+
+En calidad de: {$participante['rol']}
+
+Expedido en Bogotá D.C., a los {$fecha_actual}
+
+Código de Verificación: {$codigo_verificacion}
+Consulte la autenticidad en: " . PUBLIC_URL . "verificar.php
+
+Este es un certificado digital generado automáticamente.
+Para verificar su autenticidad, ingrese el código de verificación en nuestro sitio web.
+
+---
+SGPOE - Universidad Distrital Francisco José de Caldas
+" . date('Y');
+}
+
+function generarHashValidacion($participante, $codigo_verificacion) {
+    $datos_hash = $participante['id'] . $participante['numero_identificacion'] . $codigo_verificacion . date('Y-m-d');
+    return hash('sha256', $datos_hash);
+}
+
+function obtenerNombreMes($numero_mes) {
+    $meses = [
+        1 => 'Enero', 2 => 'Febrero', 3 => 'Marzo', 4 => 'Abril',
+        5 => 'Mayo', 6 => 'Junio', 7 => 'Julio', 8 => 'Agosto',
+        9 => 'Septiembre', 10 => 'Octubre', 11 => 'Noviembre', 12 => 'Diciembre'
+    ];
+    return $meses[$numero_mes] ?? 'Mes';
+}
+
+function obtenerModalidadCompleta($modalidad) {
+    $modalidades = [
+        'presencial' => 'Modalidad Presencial',
+        'virtual' => 'Modalidad Virtual',
+        'hibrida' => 'Modalidad Híbrida'
+    ];
+    return $modalidades[$modalidad] ?? ucfirst($modalidad);
+}
+
+function obtenerIniciales($nombres, $apellidos) {
+    $iniciales = '';
+    $palabras_nombres = explode(' ', trim($nombres));
+    $palabras_apellidos = explode(' ', trim($apellidos));
+    
+    foreach ($palabras_nombres as $palabra) {
+        if (!empty($palabra)) {
+            $iniciales .= strtoupper(substr($palabra, 0, 1));
+        }
+    }
+    
+    foreach ($palabras_apellidos as $palabra) {
+        if (!empty($palabra)) {
+            $iniciales .= strtoupper(substr($palabra, 0, 1));
+        }
+    }
+    
+    return $iniciales;
+}
+
+// FUNCIÓN REMOVIDA - SE USA LA DE funciones_svg.php
+// function optimizarSVGTexto($contenido_svg) - ELIMINADA PARA EVITAR CONFLICTO
+
 // Nueva función para generar código QR en SVG
 function generarCodigoQREnSVG($contenido_svg, $codigo_verificacion) {
     // URL completa para el QR
@@ -581,236 +485,14 @@ function generarQRSimuladoMejorado($codigo) {
     
     return $qr_svg;
 }
-
-
-function obtenerModalidadCompleta($modalidad) {
-    $modalidades = [
-        'presencial' => 'Modalidad Presencial',
-        'virtual' => 'Modalidad Virtual',
-        'hibrida' => 'Modalidad Híbrida'
-    ];
-    return $modalidades[$modalidad] ?? ucfirst($modalidad);
-}
-
-function obtenerIniciales($nombres, $apellidos) {
-    $iniciales = '';
-    $palabras_nombres = explode(' ', trim($nombres));
-    $palabras_apellidos = explode(' ', trim($apellidos));
-    
-    foreach ($palabras_nombres as $palabra) {
-        if (!empty($palabra)) {
-            $iniciales .= strtoupper(substr($palabra, 0, 1));
-        }
-    }
-    
-    foreach ($palabras_apellidos as $palabra) {
-        if (!empty($palabra)) {
-            $iniciales .= strtoupper(substr($palabra, 0, 1));
-        }
-    }
-    
-    return $iniciales;
-}
-
-function optimizarSVGTexto($contenido_svg) {
-    // Añadir atributos para mejor renderizado de texto
-    if (strpos($contenido_svg, 'text-rendering') === false) {
-        $contenido_svg = str_replace('<svg', '<svg text-rendering="geometricPrecision" shape-rendering="geometricPrecision"', $contenido_svg);
-    }
-    
-    return $contenido_svg;
-}
-
-function generarPDFCertificadoBasico($participante, $codigo_verificacion) {
-    try {
-        // Generar nombre de archivo único
-        $nombre_archivo = $codigo_verificacion . '_' . time() . '.pdf';
-        $ruta_completa = GENERATED_PATH . 'certificados/' . $nombre_archivo;
-        
-        // Asegurar que el directorio existe
-        if (!is_dir(GENERATED_PATH . 'certificados/')) {
-            mkdir(GENERATED_PATH . 'certificados/', 0755, true);
-        }
-        
-        // Generar contenido del PDF básico mejorado
-        $contenido_pdf = generarContenidoPDFMejorado($participante, $codigo_verificacion);
-        
-        // Guardar archivo
-        if (file_put_contents($ruta_completa, $contenido_pdf) === false) {
-            throw new Exception("No se pudo escribir el archivo PDF");
-        }
-        
-        return [
-            'success' => true,
-            'nombre_archivo' => $nombre_archivo,
-            'ruta_completa' => $ruta_completa,
-            'tamaño' => filesize($ruta_completa),
-            'tipo' => 'pdf'
-        ];
-        
-    } catch (Exception $e) {
-        return [
-            'success' => false,
-            'error' => $e->getMessage()
-        ];
-    }
-}
-
-function generarContenidoPDFMejorado($participante, $codigo_verificacion) {
-    // Generar texto más completo para el PDF
-    $nombre_completo = strtoupper($participante['nombres'] . ' ' . $participante['apellidos']);
-    $evento_nombre = strtoupper($participante['evento_nombre']);
-    $entidad = $participante['entidad_organizadora'];
-    $fecha_inicio = formatearFecha($participante['fecha_inicio']);
-    $fecha_fin = formatearFecha($participante['fecha_fin']);
-    $rol = $participante['rol'];
-    $modalidad = ucfirst($participante['modalidad']);
-    
-    $contenido_certificado = "CERTIFICADO DE PARTICIPACION\\n\\n";
-    $contenido_certificado .= "Se certifica que\\n\\n";
-    $contenido_certificado .= "{$nombre_completo}\\n\\n";
-    $contenido_certificado .= "participo exitosamente en el evento\\n\\n";
-    $contenido_certificado .= "{$evento_nombre}\\n\\n";
-    $contenido_certificado .= "organizado por {$entidad}\\n";
-    $contenido_certificado .= "del {$fecha_inicio} al {$fecha_fin}\\n";
-    $contenido_certificado .= "Modalidad: {$modalidad}\\n";
-    
-    if ($participante['lugar']) {
-        $contenido_certificado .= "Lugar: " . $participante['lugar'] . "\\n";
-    }
-    
-    if ($participante['horas_duracion']) {
-        $contenido_certificado .= "Duracion: " . $participante['horas_duracion'] . " horas academicas\\n";
-    }
-    
-    $contenido_certificado .= "\\nRol: {$rol}\\n\\n";
-    $contenido_certificado .= "Codigo de verificacion: {$codigo_verificacion}\\n";
-    $contenido_certificado .= "Fecha de emision: " . date('d/m/Y H:i') . "\\n";
-    $contenido_certificado .= "\\nEste certificado puede verificarse en:\\n";
-    $contenido_certificado .= PUBLIC_URL . "verificar.php?codigo={$codigo_verificacion}";
-    
-    // Generar estructura PDF mejorada
-    $pdf_content = "%PDF-1.4\n";
-    $pdf_content .= "1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n\n";
-    $pdf_content .= "2 0 obj\n<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>\nendobj\n\n";
-    $pdf_content .= "3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/MediaBox [0 0 612 792]\n/Contents 4 0 R\n";
-    $pdf_content .= "/Resources <<\n/Font <<\n/F1 5 0 R\n>>\n>>\n>>\nendobj\n\n";
-    
-    $longitud_contenido = strlen($contenido_certificado) + 100;
-    $pdf_content .= "4 0 obj\n<<\n/Length {$longitud_contenido}\n>>\nstream\nBT\n";
-    $pdf_content .= "/F1 16 Tf\n50 700 Td\n";
-    $pdf_content .= "({$contenido_certificado}) Tj\n";
-    $pdf_content .= "ET\nendstream\nendobj\n\n";
-    
-    $pdf_content .= "5 0 obj\n<<\n/Type /Font\n/Subtype /Type1\n/BaseFont /Helvetica\n>>\nendobj\n\n";
-    
-    $pdf_content .= "xref\n0 6\n";
-    $pdf_content .= "0000000000 65535 f \n";
-    $pdf_content .= "0000000010 65535 n \n";
-    $pdf_content .= "0000000053 65535 n \n";
-    $pdf_content .= "0000000125 65535 n \n";
-    $pdf_content .= "0000000348 65535 n \n";
-    $pdf_content .= "0000000500 65535 n \n";
-    $pdf_content .= "trailer\n<<\n/Size 6\n/Root 1 0 R\n>>\n";
-    $pdf_content .= "startxref\n625\n%%EOF\n";
-    
-    return $pdf_content;
-}
-
-function obtenerEstadisticasEvento($evento_id) {
-    try {
-        $db = Database::getInstance()->getConnection();
-        
-        // Estadísticas básicas
-        $stmt = $db->prepare("
-            SELECT 
-                e.nombre as evento_nombre,
-                COUNT(DISTINCT p.id) as total_participantes,
-                COUNT(DISTINCT c.id) as total_certificados,
-                COUNT(DISTINCT pt.id) as total_plantillas,
-                COUNT(DISTINCT CASE WHEN c.tipo_archivo = 'svg' THEN c.id END) as certificados_svg,
-                COUNT(DISTINCT CASE WHEN c.tipo_archivo = 'pdf' THEN c.id END) as certificados_pdf
-            FROM eventos e
-            LEFT JOIN participantes p ON e.id = p.evento_id
-            LEFT JOIN certificados c ON p.id = c.participante_id
-            LEFT JOIN plantillas_certificados pt ON e.id = pt.evento_id
-            WHERE e.id = ?
-            GROUP BY e.id, e.nombre
-        ");
-        $stmt->execute([$evento_id]);
-        $stats = $stmt->fetch();
-        
-        if (!$stats) {
-            return null;
-        }
-        
-        // Estadísticas por rol
-        $stmt = $db->prepare("
-            SELECT 
-                p.rol,
-                COUNT(*) as total,
-                COUNT(c.id) as con_certificado,
-                COUNT(pt.id) as tiene_plantilla
-            FROM participantes p 
-            LEFT JOIN certificados c ON p.id = c.participante_id
-            LEFT JOIN plantillas_certificados pt ON p.evento_id = pt.evento_id AND p.rol = pt.rol
-            WHERE p.evento_id = ? 
-            GROUP BY p.rol 
-            ORDER BY total DESC
-        ");
-        $stmt->execute([$evento_id]);
-        $stats_por_rol = $stmt->fetchAll();
-        
-        $stats['por_rol'] = $stats_por_rol;
-        $stats['pendientes'] = $stats['total_participantes'] - $stats['total_certificados'];
-        $stats['porcentaje_completado'] = $stats['total_participantes'] > 0 ? 
-            round(($stats['total_certificados'] / $stats['total_participantes']) * 100, 1) : 0;
-        
-        return $stats;
-        
-    } catch (Exception $e) {
-        error_log("Error obteniendo estadísticas: " . $e->getMessage());
-        return null;
-    }
-}
-
-function generarHashValidacion($participante, $codigo_verificacion) {
-    $datos_validacion = [
-        'numero_identificacion' => $participante['numero_identificacion'],
-        'nombres' => $participante['nombres'],
-        'apellidos' => $participante['apellidos'],
-        'evento_id' => $participante['evento_id'],
-        'evento_nombre' => $participante['evento_nombre'],
-        'codigo_verificacion' => $codigo_verificacion,
-        'fecha_inicio' => $participante['fecha_inicio'],
-        'fecha_fin' => $participante['fecha_fin'],
-        'rol' => $participante['rol'],
-        'salt' => 'certificados_digitales_svg_2025_' . date('Y-m-d'),
-        'version' => '3.0'
-    ];
-    
-    return hash('sha256', json_encode($datos_validacion, JSON_UNESCAPED_UNICODE));
-}
-
-function obtenerNombreMes($numero_mes) {
-    $meses = [
-        1 => 'enero', 2 => 'febrero', 3 => 'marzo', 4 => 'abril',
-        5 => 'mayo', 6 => 'junio', 7 => 'julio', 8 => 'agosto',
-        9 => 'septiembre', 10 => 'octubre', 11 => 'noviembre', 12 => 'diciembre'
-    ];
-    return $meses[$numero_mes] ?? 'mes';
-} 
-
-
-
-
 ?>
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Generar Certificados - Sistema de Certificados SVG</title>
+    <title>Generar Certificados - Sistema IDEXUD</title>
     <style>
         * {
             margin: 0;
@@ -820,333 +502,129 @@ function obtenerNombreMes($numero_mes) {
         
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f8f9fa;
+            background: linear-gradient(135deg, #f8fffe 0%, #e8f7f5 100%);
             line-height: 1.6;
-        }
-        
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 1rem 0;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        .header-content {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .logo h1 { font-size: 1.5rem; }
-        .user-info { display: flex; align-items: center; gap: 1rem; }
-        
-        .btn-logout {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 0.5rem 1rem;
-            text-decoration: none;
-            border-radius: 5px;
-            transition: background 0.3s;
-        }
-        
-        .btn-logout:hover { background: rgba(255,255,255,0.3); }
-        
-        .nav {
-            background: white;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        .nav-content {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 20px;
-        }
-        
-        .nav ul {
-            list-style: none;
-            display: flex;
-            gap: 2rem;
-        }
-        
-        .nav a {
-            display: block;
-            padding: 1rem 0;
-            text-decoration: none;
-            color: #333;
-            font-weight: 500;
-            transition: color 0.3s;
-            border-bottom: 3px solid transparent;
-        }
-        
-        .nav a:hover, .nav a.active {
-            color: #667eea;
-            border-bottom-color: #667eea;
+            min-height: 100vh;
         }
         
         .container {
-            max-width: 1200px;
-            margin: 2rem auto;
-            padding: 0 20px;
-        }
-        
-        .page-header {
-            text-align: center;
-            margin-bottom: 2rem;
-        }
-        
-        .page-title h2 {
-            color: #333;
-            font-size: 2.5rem;
-            margin-bottom: 0.5rem;
-        }
-        
-        .page-subtitle {
-            color: #666;
-            font-size: 1.1rem;
-        }
-        
-        .card {
+            max-width: 1000px;
+            margin: 20px auto;
             background: white;
-            padding: 2rem;
-            border-radius: 15px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
-            border: 1px solid rgba(0,0,0,0.05);
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 120, 135, 0.1);
+            overflow: hidden;
         }
         
-        .card-header {
-            border-bottom: 2px solid #f0f0f0;
-            padding-bottom: 1rem;
-            margin-bottom: 1.5rem;
-        }
-        
-        .card-title {
-            font-size: 1.3rem;
-            color: #333;
-            margin-bottom: 0.5rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        
-        .card-description {
-            color: #666;
-            font-size: 0.95rem;
-        }
-        
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-bottom: 2rem;
-        }
-        
-        .stat-card {
-            background: linear-gradient(135deg, #f8f9ff 0%, #e8efff 100%);
-            padding: 1.5rem;
-            border-radius: 12px;
+        .header {
+            background: linear-gradient(135deg, #007887 0%, #3db8ab 50%, #68d6ca 100%);
+            color: white;
+            padding: 40px 30px;
             text-align: center;
-            border: 2px solid rgba(102, 126, 234, 0.1);
-            transition: all 0.3s;
+            position: relative;
         }
         
-        .stat-card:hover {
-            transform: translateY(-2px);
-            border-color: rgba(102, 126, 234, 0.3);
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 300;
+            margin-bottom: 10px;
         }
         
-        .stat-number {
-            font-size: 2rem;
-            font-weight: 700;
-            color: #667eea;
-            margin-bottom: 0.5rem;
-        }
-        
-        .stat-label {
-            color: #666;
-            font-size: 0.9rem;
-            font-weight: 500;
-        }
-        
-        .form-group {
-            margin-bottom: 1.5rem;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 0.5rem;
-            color: #333;
-            font-weight: 500;
-        }
-        
-        .required { color: #dc3545; }
-        
-        select, input {
-            width: 100%;
-            padding: 0.75rem;
-            border: 2px solid #e1e1e1;
-            border-radius: 8px;
-            font-size: 1rem;
-            transition: border-color 0.3s;
-        }
-        
-        select:focus, input:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-        }
-        
-        .btn-group {
-            display: flex;
-            gap: 1rem;
-            margin-top: 2rem;
-        }
-        
-        .btn {
-            padding: 1rem 2rem;
-            border: none;
-            border-radius: 8px;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            justify-content: center;
-        }
-        
-        .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
-        }
-        
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
-        }
-        
-        .btn-secondary {
-            background: #28a745;
-            color: white;
-            box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
-        }
-        
-        .btn-secondary:hover {
-            background: #218838;
-            transform: translateY(-2px);
-        }
-        
-        .btn-warning {
-            background: #ffc107;
-            color: #212529;
-            box-shadow: 0 4px 15px rgba(255, 193, 7, 0.3);
-        }
-        
-        .btn-warning:hover {
-            background: #e0a800;
-            transform: translateY(-2px);
+        .content {
+            padding: 40px 30px;
         }
         
         .alert {
-            padding: 1.5rem;
-            margin-bottom: 1.5rem;
-            border-radius: 10px;
-            border-left: 4px solid;
-        }
-        
-        .alert-success {
-            background-color: #d4f6d4;
-            color: #0f5132;
-            border-left-color: #28a745;
+            padding: 20px 25px;
+            margin: 25px 0;
+            border-radius: 15px;
+            border: none;
         }
         
         .alert-error {
-            background-color: #f8d7da;
-            color: #721c24;
-            border-left-color: #dc3545;
+            background: linear-gradient(135deg, #fef2f2 0%, #fdf2f8 100%);
+            color: #991b1b;
+            border-left: 5px solid #e63946;
         }
         
-        .alert-warning {
-            background-color: #fff3cd;
-            color: #856404;
-            border-left-color: #ffc107;
+        .alert-success {
+            background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+            color: #166534;
+            border-left: 5px solid #57cc99;
         }
         
-        .alert-info {
-            background-color: #d1ecf1;
-            color: #0c5460;
-            border-left-color: #17a2b8;
+        .form-section {
+            background: linear-gradient(135deg, #ffffff 0%, #f8fffe 100%);
+            padding: 35px;
+            border-radius: 20px;
+            margin: 30px 0;
+            border: 2px solid rgba(104, 214, 202, 0.1);
+            box-shadow: 0 10px 30px rgba(0, 120, 135, 0.05);
         }
         
-        .participante-info {
-            background: linear-gradient(135deg, #e8f5e8 0%, #d4edda 100%);
-            border: 2px solid #28a745;
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
+        .form-group {
+            margin-bottom: 25px;
         }
         
-        .participante-details {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-        }
-        
-        .detail-item {
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .detail-label {
-            font-size: 0.85rem;
-            color: #155724;
-            margin-bottom: 0.25rem;
-            font-weight: 500;
-        }
-        
-        .detail-value {
+        .form-group label {
+            display: block;
+            margin-bottom: 10px;
             font-weight: 600;
-            color: #0f5132;
+            color: #3b4044;
+            font-size: 1rem;
         }
         
-        .progress-section {
-            background: #f8f9fa;
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-        }
-        
-        .progress-bar {
+        .form-group select {
             width: 100%;
-            height: 20px;
-            background-color: #e9ecef;
-            border-radius: 10px;
-            overflow: hidden;
-            margin: 1rem 0;
+            padding: 15px 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            font-size: 1rem;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            background: white;
         }
         
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #28a745 0%, #20c997 100%);
-            transition: width 0.3s ease;
-            border-radius: 10px;
+        .form-group select:focus {
+            outline: none;
+            border-color: #007887;
+            box-shadow: 0 0 0 4px rgba(0, 120, 135, 0.1);
+            transform: translateY(-2px);
         }
         
-        .btn-download {
-            background: #17a2b8;
-            color: white;
-            padding: 0.5rem 1rem;
-            text-decoration: none;
-            border-radius: 5px;
-            font-size: 0.9rem;
-            margin-top: 1rem;
+        .btn {
             display: inline-block;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            text-decoration: none;
+            margin: 8px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            font-size: 1rem;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #007887 0%, #3db8ab 100%);
+            color: white;
+            box-shadow: 0 8px 25px rgba(0, 120, 135, 0.3);
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 35px rgba(0, 120, 135, 0.4);
+        }
+        
+        .btn-secondary {
+            background: linear-gradient(135deg, #3db8ab 0%, #68d6ca 100%);
+            color: white;
+            box-shadow: 0 8px 25px rgba(61, 184, 171, 0.3);
+        }
+        
+        .btn-warning {
+            background: linear-gradient(135deg, #f9a826 0%, #f39c12 100%);
+            color: white;
+            box-shadow: 0 8px 25px rgba(249, 168, 38, 0.3);
         }
         
         .loading-overlay {
@@ -1156,237 +634,107 @@ function obtenerNombreMes($numero_mes) {
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0,0,0,0.7);
+            background: rgba(0, 120, 135, 0.9);
             z-index: 9999;
             justify-content: center;
             align-items: center;
+            color: white;
+            font-size: 1.5rem;
         }
         
-        .loading-content {
-            background: white;
-            padding: 2rem;
-            border-radius: 15px;
-            text-align: center;
+        .loading-overlay.active {
+            display: flex;
         }
         
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 1rem;
+        .info-card {
+            background: linear-gradient(135deg, #007887 0%, #07796b 50%, #3db8ab 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 20px;
+            margin: 30px 0;
         }
         
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        .info-card h3 {
+            margin-bottom: 15px;
+            font-size: 1.5rem;
         }
         
-        @media (max-width: 768px) {
-            .header-content { flex-direction: column; gap: 1rem; }
-            .nav ul { flex-wrap: wrap; gap: 1rem; }
-            .btn-group { flex-direction: column; }
-            .stats-grid { grid-template-columns: 1fr; }
-            .participante-details { grid-template-columns: 1fr; }
+        .nav-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 20px;
         }
     </style>
 </head>
 <body>
-    <header class="header">
-        <div class="header-content">
-            <div class="logo">
-                <h1>🎨 Sistema de Certificados SVG</h1>
-            </div>
-            <div class="user-info">
-                <span>Bienvenido, <?php echo htmlspecialchars($_SESSION['nombre']); ?></span>
-                <a href="../logout.php" class="btn-logout">Cerrar Sesión</a>
-            </div>
-        </div>
-    </header>
-    
-    <nav class="nav">
-        <div class="nav-content">
-            <ul>
-                <li><a href="../index.php">Dashboard</a></li>
-                <li><a href="../eventos/listar.php">Eventos</a></li>
-                <li><a href="../participantes/listar.php">Participantes</a></li>
-                <li><a href="generar.php" class="active">Certificados</a></li>
-            </ul>
-        </div>
-    </nav>
-    
     <div class="container">
-        <div class="page-header">
-            <div class="page-title">
-                <h2>🏆 Generador de Certificados</h2>
-            </div>
-            <p class="page-subtitle">Genere certificados individuales o masivos con plantillas SVG personalizadas</p>
+        <div class="header">
+            <h1>🚀 Generador de Certificados</h1>
+            <p>Sistema de Gestión de Proyectos y Oficina de Extensión (SGPOE)</p>
+            <p style="opacity: 0.9;">Universidad Distrital Francisco José de Caldas</p>
         </div>
         
-        <?php if ($error): ?>
-            <div class="alert alert-error">
-                <strong>❌ Error:</strong> <?php echo $error; ?>
-            </div>
-        <?php endif; ?>
-        
-        <?php if ($success): ?>
-            <div class="alert alert-success">
-                <?php echo $success; ?>
-            </div>
-        <?php endif; ?>
-        
-        <!-- Mostrar información del participante individual si aplica -->
-        <?php if ($participante_individual && !$error): ?>
-            <div class="participante-info">
-                <h3 style="margin-bottom: 1rem; color: #155724;">👤 Generar Certificado Individual</h3>
-                <div class="participante-details">
-                    <div class="detail-item">
-                        <div class="detail-label">Participante</div>
-                        <div class="detail-value"><?php echo htmlspecialchars($participante_individual['nombres'] . ' ' . $participante_individual['apellidos']); ?></div>
-                    </div>
-                    <div class="detail-item">
-                        <div class="detail-label">Identificación</div>
-                        <div class="detail-value"><?php echo htmlspecialchars($participante_individual['numero_identificacion']); ?></div>
-                    </div>
-                    <div class="detail-item">
-                        <div class="detail-label">Evento</div>
-                        <div class="detail-value"><?php echo htmlspecialchars($participante_individual['evento_nombre']); ?></div>
-                    </div>
-                    <div class="detail-item">
-                        <div class="detail-label">Rol</div>
-                        <div class="detail-value"><?php echo htmlspecialchars($participante_individual['rol']); ?></div>
-                    </div>
+        <div class="content">
+            <?php if ($error): ?>
+                <div class="alert alert-error">
+                    <strong>❌ Error:</strong> <?php echo nl2br(htmlspecialchars($error)); ?>
                 </div>
-                
-                <form method="POST" style="margin-top: 1.5rem;">
-                    <input type="hidden" name="accion" value="generar_individual">
-                    <input type="hidden" name="evento_id" value="<?php echo $participante_individual['evento_id']; ?>">
-                    <input type="hidden" name="participante_id" value="<?php echo $participante_individual['id']; ?>">
-                    <button type="submit" class="btn btn-primary" onclick="mostrarCargando()">
-                        🎨 Generar Certificado Individual
-                    </button>
-                </form>
-            </div>
-        <?php endif; ?>
-        
-        <!-- Selector de evento para estadísticas -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">📊 Estadísticas por Evento</h3>
-                <p class="card-description">Seleccione un evento para ver estadísticas detalladas</p>
-            </div>
-            
-            <form method="GET" id="formEstadisticas">
-                <div class="form-group">
-                    <label for="evento_id_stats">Evento</label>
-                    <select id="evento_id_stats" name="evento_id" onchange="this.form.submit()">
-                        <option value="">Seleccione un evento para ver estadísticas</option>
-                        <?php foreach ($eventos as $evento): ?>
-                            <option value="<?php echo $evento['id']; ?>" 
-                                    <?php echo (isset($_GET['evento_id']) && $_GET['evento_id'] == $evento['id']) ? 'selected' : ''; ?>>
-                                <?php echo htmlspecialchars($evento['nombre']); ?> 
-                                (<?php echo formatearFecha($evento['fecha_inicio']); ?>)
-                                - <?php echo $evento['total_participantes']; ?> participantes
-                                <?php if ($evento['tiene_plantillas'] > 0): ?>
-                                    🎨
-                                <?php endif; ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-            </form>
-            
-            <?php if ($estadisticas_evento): ?>
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-number"><?php echo $estadisticas_evento['total_participantes']; ?></div>
-                        <div class="stat-label">Total Participantes</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number"><?php echo $estadisticas_evento['total_certificados']; ?></div>
-                        <div class="stat-label">Certificados Generados</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number"><?php echo $estadisticas_evento['pendientes']; ?></div>
-                        <div class="stat-label">Pendientes</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number"><?php echo $estadisticas_evento['total_plantillas']; ?></div>
-                        <div class="stat-label">Plantillas SVG</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number"><?php echo $estadisticas_evento['certificados_svg']; ?></div>
-                        <div class="stat-label">Certificados SVG</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number"><?php echo $estadisticas_evento['porcentaje_completado']; ?>%</div>
-                        <div class="stat-label">Completado</div>
-                    </div>
-                </div>
-                
-                <div class="progress-section">
-                    <h4>Progreso de Generación</h4>
-                    <div class="progress-bar">
-                        <div class="progress-fill" style="width: <?php echo $estadisticas_evento['porcentaje_completado']; ?>%"></div>
-                    </div>
-                    <p style="text-align: center; margin-top: 0.5rem;">
-                        <?php echo $estadisticas_evento['total_certificados']; ?> de <?php echo $estadisticas_evento['total_participantes']; ?> certificados generados
-                    </p>
-                </div>
-                
-                <?php if (!empty($estadisticas_evento['por_rol'])): ?>
-                    <h4 style="margin-bottom: 1rem;">📋 Estadísticas por Rol</h4>
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
-                        <?php foreach ($estadisticas_evento['por_rol'] as $rol_stat): ?>
-                            <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; border-left: 4px solid #667eea;">
-                                <div style="font-weight: 600; color: #333;"><?php echo htmlspecialchars($rol_stat['rol']); ?></div>
-                                <div style="font-size: 0.9rem; color: #666;">
-                                    <?php echo $rol_stat['con_certificado']; ?>/<?php echo $rol_stat['total']; ?> certificados
-                                    <?php if ($rol_stat['tiene_plantilla'] > 0): ?>
-                                        | 🎨 Con plantilla SVG
-                                    <?php endif; ?>
-                                </div>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                <?php endif; ?>
             <?php endif; ?>
-        </div>
-        
-        <!-- Generación de certificados -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">🎨 Generador de Certificados</h3>
-                <p class="card-description">Genere certificados individuales o masivos con plantillas SVG</p>
+            
+            <?php if ($success): ?>
+                <div class="alert alert-success">
+                    <strong>✅ Éxito:</strong> <?php echo nl2br(htmlspecialchars($success)); ?>
+                </div>
+            <?php endif; ?>
+            
+            <div class="info-card">
+                <h3>ℹ️ Sistema de Plantillas SVG</h3>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-top: 20px;">
+                    <div>
+                        <h4 style="color: rgba(255,255,255,0.9); margin-bottom: 10px;">🎨 Plantillas por Rol</h4>
+                        <p>Cada rol puede tener su propia plantilla SVG personalizada con identidad IDEXUD.</p>
+                    </div>
+                    <div>
+                        <h4 style="color: rgba(255,255,255,0.9); margin-bottom: 10px;">📋 Plantilla General</h4>
+                        <p>Si no hay plantilla específica, se usa la plantilla "General" como respaldo.</p>
+                    </div>
+                    <div>
+                        <h4 style="color: rgba(255,255,255,0.9); margin-bottom: 10px;">📄 Fallback PDF</h4>
+                        <p>Si no hay plantillas SVG, se genera un PDF básico automáticamente.</p>
+                    </div>
+                    <div>
+                        <h4 style="color: rgba(255,255,255,0.9); margin-bottom: 10px;">⚡ Alta Calidad</h4>
+                        <p>Los certificados SVG son vectoriales y se escalan sin pérdida de calidad.</p>
+                    </div>
+                </div>
             </div>
             
-            <form method="POST" id="formGenerar">
-                <div class="form-group">
-                    <label for="evento_id">Evento <span class="required">*</span></label>
-                    <select id="evento_id" name="evento_id" required>
-                        <option value="">Seleccione un evento</option>
-                        <?php foreach ($eventos as $evento): ?>
-                            <option value="<?php echo $evento['id']; ?>" 
-                                    data-participantes="<?php echo $evento['total_participantes']; ?>"
-                                    data-certificados="<?php echo $evento['total_certificados']; ?>"
-                                    data-plantillas="<?php echo $evento['tiene_plantillas']; ?>">
-                                <?php echo htmlspecialchars($evento['nombre']); ?> 
-                                (<?php echo formatearFecha($evento['fecha_inicio']); ?> - <?php echo formatearFecha($evento['fecha_fin']); ?>)
-                                - <?php echo $evento['total_participantes']; ?> participantes
-                                <?php if ($evento['tiene_plantillas'] > 0): ?>
-                                    🎨 SVG
-                                <?php endif; ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
+            <div class="form-section">
+                <h2 style="color: #007887; margin-bottom: 25px; text-align: center;">Seleccionar Evento para Generar Certificados</h2>
                 
-                <div class="btn-group">
-                    <button type="submit" name="accion" value="generar_masivo" class="btn btn-primary" onclick="mostrarCargando()">
-                        🚀 Generar Certificados Masivos
-                    </button>
+                <form method="POST" onsubmit="return confirmarGeneracion()">
+                    <div class="form-group">
+                        <label for="evento_id">Evento <span style="color: #e63946;">*</span></label>
+                        <select id="evento_id" name="evento_id" required>
+                            <option value="">Seleccione un evento</option>
+                            <?php foreach ($eventos as $evento): ?>
+                                <option value="<?php echo $evento['id']; ?>">
+                                    <?php echo htmlspecialchars($evento['nombre']); ?> 
+                                    (<?php echo formatearFecha($evento['fecha_inicio']); ?> - <?php echo formatearFecha($evento['fecha_fin']); ?>)
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    
+                    <div style="text-align: center; margin-top: 30px;">
+                        <button type="submit" class="btn btn-primary" onclick="mostrarCargando()">
+                            🚀 Generar Certificados Masivos
+                        </button>
+                    </div>
+                </form>
+                
+                <div class="nav-buttons">
                     <a href="../participantes/listar.php" class="btn btn-secondary">
                         👥 Ver Participantes
                     </a>
@@ -1394,78 +742,157 @@ function obtenerNombreMes($numero_mes) {
                         📝 Gestionar Eventos
                     </a>
                 </div>
-            </form>
-        </div>
-        
-        <!-- Información sobre plantillas -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">ℹ️ Información sobre Plantillas SVG</h3>
             </div>
-            <div class="alert alert-info">
-                <h4 style="margin-bottom: 1rem;">🎨 Sistema de Plantillas SVG</h4>
-                <ul style="margin-left: 1.5rem; line-height: 1.8;">
-                    <li><strong>Plantillas por Rol:</strong> Cada rol puede tener su propia plantilla SVG personalizada</li>
-                    <li><strong>Plantilla General:</strong> Si no hay plantilla específica, se usa la plantilla "General"</li>
-                    <li><strong>Fallback PDF:</strong> Si no hay plantillas SVG, se genera un PDF básico</li>
-                    <li><strong>Variables Dinámicas:</strong> Las plantillas SVG soportan múltiples variables como nombres, evento, fechas, etc.</li>
-                    <li><strong>Alta Calidad:</strong> Los certificados SVG son vectoriales y se escalan sin pérdida de calidad</li>
-                </ul>
-                <p style="margin-top: 1rem;">
-                    <a href="../eventos/listar.php" style="color: #0c5460; text-decoration: none; font-weight: 600;">
-                        → Gestionar plantillas SVG en la sección de Eventos
-                    </a>
-                </p>
+            
+            <div class="info-card">
+                <h3>🔧 Variables Dinámicas Disponibles</h3>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 25px; margin-top: 20px;">
+                    <div>
+                        <h4 style="color: rgba(255,255,255,0.9); margin-bottom: 15px;">👤 Datos del Participante</h4>
+                        <ul style="list-style: none; padding: 0;">
+                            <li style="margin-bottom: 5px;">• {{nombres}} {{apellidos}}</li>
+                            <li style="margin-bottom: 5px;">• {{numero_identificacion}}</li>
+                            <li style="margin-bottom: 5px;">• {{correo_electronico}}</li>
+                            <li style="margin-bottom: 5px;">• {{rol}} {{telefono}}</li>
+                            <li style="margin-bottom: 5px;">• {{institucion}}</li>
+                        </ul>
+                    </div>
+                    
+                    <div>
+                        <h4 style="color: rgba(255,255,255,0.9); margin-bottom: 15px;">📅 Datos del Evento</h4>
+                        <ul style="list-style: none; padding: 0;">
+                            <li style="margin-bottom: 5px;">• {{evento_nombre}}</li>
+                            <li style="margin-bottom: 5px;">• {{fecha_inicio}} {{fecha_fin}}</li>
+                            <li style="margin-bottom: 5px;">• {{entidad_organizadora}}</li>
+                            <li style="margin-bottom: 5px;">• {{modalidad}} {{lugar}}</li>
+                            <li style="margin-bottom: 5px;">• {{horas_duracion}}</li>
+                        </ul>
+                    </div>
+                    
+                    <div>
+                        <h4 style="color: rgba(255,255,255,0.9); margin-bottom: 15px;">🏆 Datos del Certificado</h4>
+                        <ul style="list-style: none; padding: 0;">
+                            <li style="margin-bottom: 5px;">• {{codigo_verificacion}}</li>
+                            <li style="margin-bottom: 5px;">• {{numero_certificado}}</li>
+                            <li style="margin-bottom: 5px;">• {{fecha_generacion}}</li>
+                            <li style="margin-bottom: 5px;">• {{url_verificacion}}</li>
+                            <li style="margin-bottom: 5px;">• {{año}} {{mes}} {{dia}}</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 25px; text-align: center;">
+                    <p style="font-size: 1.1rem; opacity: 0.9;">
+                        <strong>💡 Consejo:</strong> Configure plantillas SVG desde la sección "Plantillas" en cada evento para obtener certificados personalizados con la identidad institucional de IDEXUD.
+                    </p>
+                </div>
             </div>
         </div>
     </div>
     
     <!-- Overlay de carga -->
     <div class="loading-overlay" id="loadingOverlay">
-        <div class="loading-content">
-            <div class="spinner"></div>
-            <h3>Generando Certificados...</h3>
-            <p>Por favor espere, este proceso puede tomar varios minutos.</p>
+        <div style="text-align: center;">
+            <div style="font-size: 3rem; margin-bottom: 20px; animation: spin 2s linear infinite;">⚙️</div>
+            <div style="font-size: 1.5rem; margin-bottom: 10px;">Generando Certificados</div>
+            <div style="font-size: 1rem; opacity: 0.8;">Por favor espere, este proceso puede tomar varios minutos...</div>
+            <div style="margin-top: 20px; background: rgba(255,255,255,0.2); border-radius: 10px; padding: 10px;">
+                <div style="font-size: 0.9rem;">🎨 Procesando plantillas SVG</div>
+                <div style="font-size: 0.9rem;">📄 Generando certificados PDF</div>
+                <div style="font-size: 0.9rem;">💾 Guardando en base de datos</div>
+            </div>
         </div>
     </div>
     
-    <script>
-        function mostrarCargando() {
-            document.getElementById('loadingOverlay').style.display = 'flex';
+    <style>
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
         }
         
-        // Actualizar información del evento seleccionado
-        document.getElementById('evento_id').addEventListener('change', function() {
-            const option = this.options[this.selectedIndex];
-            if (option.value) {
-                const participantes = option.dataset.participantes;
-                const certificados = option.dataset.certificados;
-                const plantillas = option.dataset.plantillas;
-                const pendientes = participantes - certificados;
-                
-                // Aquí podrías mostrar información adicional del evento seleccionado
-                console.log(`Evento seleccionado: ${participantes} participantes, ${certificados} certificados generados, ${pendientes} pendientes`);
+        @media (max-width: 768px) {
+            .container {
+                margin: 10px;
+                border-radius: 15px;
             }
-        });
+            
+            .header {
+                padding: 30px 20px;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .content {
+                padding: 30px 20px;
+            }
+            
+            .form-section {
+                padding: 25px 20px;
+            }
+            
+            .nav-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .btn {
+                width: 100%;
+                max-width: 300px;
+            }
+        }
+    </style>
+    
+    <script>
+        function mostrarCargando() {
+            const overlay = document.getElementById('loadingOverlay');
+            overlay.classList.add('active');
+        }
         
-        // Prevenir envío múltiple del formulario
-        document.getElementById('formGenerar').addEventListener('submit', function(e) {
-            const submitButtons = this.querySelectorAll('button[type="submit"]');
-            submitButtons.forEach(btn => {
-                btn.disabled = true;
-                btn.innerHTML = btn.innerHTML.replace('🚀', '⏳');
-            });
-        });
+        function confirmarGeneracion() {
+            const eventoSelect = document.getElementById('evento_id');
+            const eventoNombre = eventoSelect.options[eventoSelect.selectedIndex].text;
+            
+            if (!eventoSelect.value) {
+                alert('❌ Por favor seleccione un evento antes de continuar');
+                return false;
+            }
+            
+            const confirmacion = confirm(
+                `🚀 CONFIRMACIÓN DE GENERACIÓN MASIVA\n\n` +
+                `Evento seleccionado: ${eventoNombre}\n\n` +
+                `Esta acción generará certificados para TODOS los participantes sin certificado en este evento.\n\n` +
+                `El proceso puede tomar varios minutos dependiendo del número de participantes.\n\n` +
+                `¿Está seguro de continuar?`
+            );
+            
+            if (confirmacion) {
+                mostrarCargando();
+                return true;
+            }
+            
+            return false;
+        }
         
-        // Auto-cerrar alerts después de 10 segundos
+        // Auto-ocultar mensajes después de unos segundos
         setTimeout(function() {
             const alerts = document.querySelectorAll('.alert');
-            alerts.forEach(alert => {
-                alert.style.transition = 'opacity 0.5s';
-                alert.style.opacity = '0';
-                setTimeout(() => alert.remove(), 500);
+            alerts.forEach(function(alert) {
+                if (alert.classList.contains('alert-success')) {
+                    alert.style.transition = 'opacity 0.5s ease';
+                    alert.style.opacity = '0';
+                    setTimeout(() => alert.style.display = 'none', 500);
+                }
             });
-        }, 10000);
+        }, 8000);
+        
+        // Prevenir doble envío de formulario
+        document.querySelector('form').addEventListener('submit', function() {
+            const submitBtn = this.querySelector('button[type="submit"]');
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '⏳ Generando...';
+        });
     </script>
 </body>
 </html>

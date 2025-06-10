@@ -1,15 +1,27 @@
 <?php
-// admin/participantes/listar.php
+// admin/participantes/listar.php - VERSIÓN MINIMALISTA
 require_once '../../config/config.php';
 require_once '../../includes/funciones.php';
 
 verificarAutenticacion();
 
-// Filtros
-$pagina = isset($_GET['pagina']) ? intval($_GET['pagina']) : 1;
+// Manejar mensajes de la sesión
+$mensaje = null;
+if (isset($_SESSION['success_mensaje'])) {
+    $mensaje = ['tipo' => 'success', 'texto' => $_SESSION['success_mensaje']];
+    unset($_SESSION['success_mensaje']);
+} elseif (isset($_SESSION['error_mensaje'])) {
+    $mensaje = ['tipo' => 'error', 'texto' => $_SESSION['error_mensaje']];
+    unset($_SESSION['error_mensaje']);
+}
+
+// Filtros simples
 $buscar = isset($_GET['buscar']) ? limpiarDatos($_GET['buscar']) : '';
 $evento_id = isset($_GET['evento_id']) ? intval($_GET['evento_id']) : 0;
-$rol_filtro = isset($_GET['rol']) ? limpiarDatos($_GET['rol']) : '';
+
+$error = '';
+$participantes = [];
+$eventos = [];
 
 try {
     $db = Database::getInstance()->getConnection();
@@ -23,8 +35,7 @@ try {
     $params = [];
     
     if (!empty($buscar)) {
-        $where_conditions[] = "(p.nombres LIKE ? OR p.apellidos LIKE ? OR p.numero_identificacion LIKE ? OR p.correo_electronico LIKE ?)";
-        $params[] = "%$buscar%";
+        $where_conditions[] = "(p.nombres LIKE ? OR p.apellidos LIKE ? OR p.numero_identificacion LIKE ?)";
         $params[] = "%$buscar%";
         $params[] = "%$buscar%";
         $params[] = "%$buscar%";
@@ -35,45 +46,24 @@ try {
         $params[] = $evento_id;
     }
     
-    if (!empty($rol_filtro)) {
-        $where_conditions[] = "p.rol = ?";
-        $params[] = $rol_filtro;
-    }
-    
     $where_clause = !empty($where_conditions) ? 'WHERE ' . implode(' AND ', $where_conditions) : '';
     
-    // Contar total de registros
-    $count_query = "SELECT COUNT(*) FROM participantes p $where_clause";
-    $stmt = $db->prepare($count_query);
-    $stmt->execute($params);
-    $total_registros = $stmt->fetchColumn();
-    
-    // Calcular paginación
-    $paginacion = paginar($total_registros, $pagina);
-    
-    // Obtener participantes con información del evento
+    // Obtener participantes
     $query = "
-        SELECT p.*, e.nombre as evento_nombre, e.fecha_inicio, e.fecha_fin,
+        SELECT p.*, e.nombre as evento_nombre,
                (SELECT COUNT(*) FROM certificados c WHERE c.participante_id = p.id) as tiene_certificado
         FROM participantes p 
         LEFT JOIN eventos e ON p.evento_id = e.id 
         $where_clause 
-        ORDER BY p.created_at DESC 
-        LIMIT {$paginacion['registros_por_pagina']} OFFSET {$paginacion['offset']}
+        ORDER BY p.nombres, p.apellidos
     ";
     $stmt = $db->prepare($query);
     $stmt->execute($params);
     $participantes = $stmt->fetchAll();
     
-    // Obtener roles únicos para el filtro
-    $stmt = $db->query("SELECT DISTINCT rol FROM participantes ORDER BY rol");
-    $roles = $stmt->fetchAll(PDO::FETCH_COLUMN);
-    
 } catch (Exception $e) {
-    $error = "Error al cargar los participantes: " . $e->getMessage();
+    $error = "Error: " . $e->getMessage();
 }
-
-$mensaje = obtenerMensaje();
 
 // Manejar eliminación
 if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
@@ -83,29 +73,22 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
         // Verificar si tiene certificados
         $stmt = $db->prepare("SELECT COUNT(*) FROM certificados WHERE participante_id = ?");
         $stmt->execute([$participante_id]);
-        $tiene_certificados = $stmt->fetchColumn() > 0;
+        $tiene_certificados = $stmt->fetchColumn();
         
-        if ($tiene_certificados) {
-            mostrarMensaje('error', 'No se puede eliminar un participante que tiene certificados generados');
+        if ($tiene_certificados > 0) {
+            $_SESSION['error_mensaje'] = 'No se puede eliminar: el participante tiene certificados';
         } else {
-            // Obtener datos para auditoría
-            $stmt = $db->prepare("SELECT * FROM participantes WHERE id = ?");
-            $stmt->execute([$participante_id]);
-            $participante_data = $stmt->fetch();
-            
-            // Eliminar participante
             $stmt = $db->prepare("DELETE FROM participantes WHERE id = ?");
             $stmt->execute([$participante_id]);
-            
-            registrarAuditoria('DELETE', 'participantes', $participante_id, $participante_data);
-            mostrarMensaje('success', 'Participante eliminado exitosamente');
+            $_SESSION['success_mensaje'] = 'Participante eliminado';
         }
         
         header('Location: listar.php');
         exit;
-        
     } catch (Exception $e) {
-        mostrarMensaje('error', 'Error al eliminar el participante: ' . $e->getMessage());
+        $_SESSION['error_mensaje'] = 'Error al eliminar: ' . $e->getMessage();
+        header('Location: listar.php');
+        exit;
     }
 }
 ?>
@@ -114,7 +97,7 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lista de Participantes - Sistema de Certificados</title>
+    <title>Participantes - Sistema de Certificados</title>
     <style>
         * {
             margin: 0;
@@ -123,48 +106,65 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
         }
         
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f8f9fa;
-            line-height: 1.6;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f8f9fa;
+            color: #333;
+            line-height: 1.5;
         }
         
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            background: #fff;
+            border-bottom: 1px solid #e1e5e9;
             padding: 1rem 0;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         
         .header-content {
             max-width: 1200px;
             margin: 0 auto;
-            padding: 0 20px;
+            padding: 0 1rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
         
-        .logo h1 { font-size: 1.5rem; }
-        .user-info { display: flex; align-items: center; gap: 1rem; }
-        .btn-logout {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 0.5rem 1rem;
-            text-decoration: none;
-            border-radius: 5px;
-            transition: background 0.3s;
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #2d3748;
         }
-        .btn-logout:hover { background: rgba(255,255,255,0.3); }
+        
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            font-size: 0.9rem;
+            color: #718096;
+        }
+        
+        .logout {
+            color: #e53e3e;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border: 1px solid #e53e3e;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+        
+        .logout:hover {
+            background: #e53e3e;
+            color: white;
+        }
         
         .nav {
-            background: white;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            background: #fff;
+            border-bottom: 1px solid #e1e5e9;
+            padding: 0.5rem 0;
         }
         
         .nav-content {
             max-width: 1200px;
             margin: 0 auto;
-            padding: 0 20px;
+            padding: 0 1rem;
         }
         
         .nav ul {
@@ -174,24 +174,23 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
         }
         
         .nav a {
-            display: block;
-            padding: 1rem 0;
+            color: #718096;
             text-decoration: none;
-            color: #333;
-            font-weight: 500;
-            transition: color 0.3s;
-            border-bottom: 3px solid transparent;
+            padding: 0.5rem 0;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
         }
         
-        .nav a:hover, .nav a.active {
-            color: #667eea;
-            border-bottom-color: #667eea;
+        .nav a:hover,
+        .nav a.active {
+            color: #2d3748;
+            border-bottom-color: #4299e1;
         }
         
         .container {
             max-width: 1200px;
             margin: 2rem auto;
-            padding: 0 20px;
+            padding: 0 1rem;
         }
         
         .page-header {
@@ -201,84 +200,96 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
             margin-bottom: 2rem;
         }
         
-        .page-title h2 {
-            color: #333;
-            font-size: 2rem;
+        .page-header h2 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: #2d3748;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 0.75rem 1rem;
+            text-decoration: none;
+            border-radius: 4px;
+            font-weight: 500;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+            border: none;
+            cursor: pointer;
         }
         
         .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #4299e1;
             color: white;
-            padding: 0.75rem 1.5rem;
-            text-decoration: none;
-            border-radius: 5px;
-            font-weight: 500;
-            transition: transform 0.2s;
         }
         
-        .btn-primary:hover { transform: translateY(-2px); }
+        .btn-primary:hover {
+            background: #3182ce;
+        }
+        
+        .alert {
+            padding: 1rem;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+            border-left: 4px solid;
+        }
+        
+        .alert-success {
+            background: #f0fff4;
+            color: #22543d;
+            border-left-color: #38a169;
+        }
+        
+        .alert-error {
+            background: #fed7d7;
+            color: #742a2a;
+            border-left-color: #e53e3e;
+        }
         
         .filters {
             background: white;
             padding: 1.5rem;
-            border-radius: 10px;
-            margin-bottom: 2rem;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 6px;
+            margin-bottom: 1.5rem;
+            border: 1px solid #e1e5e9;
         }
         
         .filters-grid {
             display: grid;
-            grid-template-columns: 2fr 1fr 1fr auto;
+            grid-template-columns: 2fr 1fr auto;
             gap: 1rem;
             align-items: end;
         }
         
-        .form-group {
-            display: flex;
-            flex-direction: column;
-        }
-        
-        label {
+        .form-group label {
+            display: block;
             margin-bottom: 0.5rem;
-            color: #333;
             font-weight: 500;
+            color: #4a5568;
+            font-size: 0.9rem;
         }
         
-        input, select {
+        .form-group input,
+        .form-group select {
+            width: 100%;
             padding: 0.75rem;
-            border: 2px solid #e1e1e1;
-            border-radius: 5px;
-            font-size: 1rem;
-            transition: border-color 0.3s;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-size: 0.9rem;
         }
         
-        input:focus, select:focus {
+        .form-group input:focus,
+        .form-group select:focus {
             outline: none;
-            border-color: #667eea;
+            border-color: #4299e1;
+            box-shadow: 0 0 0 2px rgba(66, 153, 225, 0.1);
         }
         
-        .btn-secondary {
-            background: #6c757d;
-            color: white;
-            padding: 0.75rem 1.5rem;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: 500;
-            transition: background 0.3s;
-        }
-        
-        .btn-secondary:hover { background: #5a6268; }
-        
-        .card {
+        .table-container {
             background: white;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 6px;
+            border: 1px solid #e1e5e9;
             overflow: hidden;
-        }
-        
-        .table-responsive {
-            overflow-x: auto;
         }
         
         table {
@@ -286,31 +297,58 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
             border-collapse: collapse;
         }
         
-        th, td {
+        th {
+            background: #f7fafc;
             padding: 1rem;
             text-align: left;
-            border-bottom: 1px solid #e9ecef;
-        }
-        
-        th {
-            background-color: #f8f9fa;
             font-weight: 600;
-            color: #333;
+            color: #4a5568;
+            font-size: 0.85rem;
+            border-bottom: 1px solid #e1e5e9;
         }
         
-        tr:hover { background-color: #f8f9fa; }
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid #f1f3f4;
+        }
+        
+        tr:hover {
+            background: #f7fafc;
+        }
+        
+        .participant-name {
+            font-weight: 500;
+            color: #2d3748;
+        }
+        
+        .participant-email {
+            font-size: 0.85rem;
+            color: #718096;
+            margin-top: 0.25rem;
+        }
         
         .badge {
-            padding: 0.25rem 0.75rem;
-            border-radius: 20px;
-            font-size: 0.875rem;
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 3px;
+            font-size: 0.75rem;
             font-weight: 500;
         }
         
-        .badge-success { background-color: #d4edda; color: #155724; }
-        .badge-warning { background-color: #fff3cd; color: #856404; }
-        .badge-info { background-color: #d1ecf1; color: #0c5460; }
-        .badge-secondary { background-color: #e2e3e5; color: #383d41; }
+        .badge-success {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+        
+        .badge-pending {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+        
+        .badge-role {
+            background: #e2e8f0;
+            color: #4a5568;
+        }
         
         .actions {
             display: flex;
@@ -318,76 +356,101 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
         }
         
         .btn-sm {
-            padding: 0.375rem 0.75rem;
-            font-size: 0.875rem;
-            border-radius: 4px;
+            padding: 0.4rem 0.8rem;
+            font-size: 0.8rem;
+            border-radius: 3px;
             text-decoration: none;
             font-weight: 500;
-            transition: transform 0.2s;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
         }
         
-        .btn-sm:hover { transform: translateY(-1px); }
-        .btn-edit { background: #28a745; color: white; }
-        .btn-delete { background: #dc3545; color: white; }
-        .btn-view { background: #17a2b8; color: white; }
-        
-        .alert {
-            padding: 1rem;
-            margin-bottom: 1rem;
-            border-radius: 5px;
-            text-align: center;
+        .btn-generate {
+            background: #38a169;
+            color: white;
         }
         
-        .alert-success {
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
+        .btn-generate:hover {
+            background: #2f855a;
         }
         
-        .alert-error {
-            background-color: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
+        .btn-edit {
+            background: #4299e1;
+            color: white;
+        }
+        
+        .btn-edit:hover {
+            background: #3182ce;
+        }
+        
+        .btn-delete {
+            background: #e53e3e;
+            color: white;
+        }
+        
+        .btn-delete:hover {
+            background: #c53030;
+        }
+        
+        .btn-view {
+            background: #718096;
+            color: white;
+        }
+        
+        .btn-view:hover {
+            background: #4a5568;
         }
         
         .empty-state {
             text-align: center;
             padding: 3rem;
-            color: #666;
+            color: #718096;
         }
         
-        .stats-bar {
-            background: #e3f2fd;
-            padding: 1rem;
-            border-radius: 8px;
-            margin-bottom: 2rem;
-            display: flex;
-            justify-content: space-around;
-            text-align: center;
-        }
-        
-        .stat-item strong {
-            display: block;
-            font-size: 1.5rem;
-            color: #1976d2;
+        .empty-state h3 {
+            margin-bottom: 0.5rem;
+            color: #4a5568;
         }
         
         @media (max-width: 768px) {
-            .filters-grid { grid-template-columns: 1fr; }
-            .stats-bar { flex-direction: column; gap: 1rem; }
-            .page-header { flex-direction: column; gap: 1rem; text-align: center; }
+            .header-content {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            .nav ul {
+                flex-wrap: wrap;
+                gap: 1rem;
+            }
+            
+            .page-header {
+                flex-direction: column;
+                gap: 1rem;
+                text-align: center;
+            }
+            
+            .filters-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .actions {
+                flex-direction: column;
+            }
+            
+            table {
+                font-size: 0.85rem;
+            }
         }
     </style>
 </head>
 <body>
     <header class="header">
         <div class="header-content">
-            <div class="logo">
-                <h1>Sistema de Certificados</h1>
-            </div>
+            <h1>Sistema de Certificados</h1>
             <div class="user-info">
-                <span>Bienvenido, <?php echo htmlspecialchars($_SESSION['nombre']); ?></span>
-                <a href="../logout.php" class="btn-logout">Cerrar Sesión</a>
+                <span><?php echo htmlspecialchars($_SESSION['nombre']); ?></span>
+                <a href="../logout.php" class="logout">Salir</a>
             </div>
         </div>
     </header>
@@ -405,45 +468,28 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
     
     <div class="container">
         <div class="page-header">
-            <div class="page-title">
-                <h2>Gestión de Participantes</h2>
-            </div>
-            <a href="cargar.php" class="btn-primary">📤 Cargar Participantes</a>
+            <h2>Participantes</h2>
+            <a href="cargar.php" class="btn btn-primary">Cargar participantes</a>
         </div>
         
         <?php if ($mensaje): ?>
             <div class="alert alert-<?php echo $mensaje['tipo']; ?>">
-                <?php echo $mensaje['texto']; ?>
+                <?php echo htmlspecialchars($mensaje['texto']); ?>
             </div>
         <?php endif; ?>
         
-        <?php if (isset($error)): ?>
+        <?php if ($error): ?>
             <div class="alert alert-error">
-                <?php echo $error; ?>
+                <?php echo htmlspecialchars($error); ?>
             </div>
         <?php endif; ?>
-        
-        <div class="stats-bar">
-            <div class="stat-item">
-                <strong><?php echo $total_registros; ?></strong>
-                <span>Total Participantes</span>
-            </div>
-            <div class="stat-item">
-                <strong><?php echo count($eventos); ?></strong>
-                <span>Eventos</span>
-            </div>
-            <div class="stat-item">
-                <strong><?php echo count($roles); ?></strong>
-                <span>Roles Diferentes</span>
-            </div>
-        </div>
         
         <div class="filters">
             <form method="GET">
                 <div class="filters-grid">
                     <div class="form-group">
-                        <label for="buscar">Buscar participante</label>
-                        <input type="text" id="buscar" name="buscar" value="<?php echo htmlspecialchars($buscar); ?>" placeholder="Nombre, identificación o correo...">
+                        <label for="buscar">Buscar</label>
+                        <input type="text" id="buscar" name="buscar" value="<?php echo htmlspecialchars($buscar); ?>" placeholder="Nombre o identificación">
                     </div>
                     
                     <div class="form-group">
@@ -458,112 +504,111 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
                         </select>
                     </div>
                     
-                    <div class="form-group">
-                        <label for="rol">Rol</label>
-                        <select id="rol" name="rol">
-                            <option value="">Todos los roles</option>
-                            <?php foreach ($roles as $rol): ?>
-                                <option value="<?php echo htmlspecialchars($rol); ?>" <?php echo $rol_filtro === $rol ? 'selected' : ''; ?>>
-                                    <?php echo htmlspecialchars($rol); ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    
-                    <button type="submit" class="btn-secondary">Filtrar</button>
+                    <button type="submit" class="btn btn-primary">Filtrar</button>
                 </div>
             </form>
         </div>
         
-        <div class="card">
-            <div class="table-responsive">
-                <?php if (!empty($participantes)): ?>
-                    <table>
-                        <thead>
+        <div class="table-container">
+            <?php if (!empty($participantes)): ?>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Participante</th>
+                            <th>Identificación</th>
+                            <th>Evento</th>
+                            <th>Rol</th>
+                            <th>Certificado</th>
+                            <th>Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($participantes as $participante): ?>
                             <tr>
-                                <th>Participante</th>
-                                <th>Identificación</th>
-                                <th>Evento</th>
-                                <th>Rol</th>
-                                <th>Certificado</th>
-                                <th>Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($participantes as $participante): ?>
-                                <tr>
-                                    <td>
-                                        <div>
-                                            <strong><?php echo htmlspecialchars($participante['nombres'] . ' ' . $participante['apellidos']); ?></strong>
-                                            <br>
-                                            <small style="color: #666;"><?php echo htmlspecialchars($participante['correo_electronico']); ?></small>
-                                            <?php if ($participante['telefono']): ?>
-                                                <br><small>📞 <?php echo htmlspecialchars($participante['telefono']); ?></small>
-                                            <?php endif; ?>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <strong><?php echo htmlspecialchars($participante['numero_identificacion']); ?></strong>
-                                        <?php if ($participante['institucion']): ?>
-                                            <br><small style="color: #666;"><?php echo htmlspecialchars($participante['institucion']); ?></small>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <strong><?php echo htmlspecialchars($participante['evento_nombre']); ?></strong>
-                                        <br>
-                                        <small style="color: #666;">
-                                            <?php echo formatearFecha($participante['fecha_inicio']); ?> - 
-                                            <?php echo formatearFecha($participante['fecha_fin']); ?>
-                                        </small>
-                                    </td>
-                                    <td>
-                                        <?php
-                                        $rol_classes = [
-                                            'Ponente' => 'badge-warning',
-                                            'Organizador' => 'badge-info',
-                                            'Moderador' => 'badge-info',
-                                            'Participante' => 'badge-success',
-                                            'Asistente' => 'badge-secondary'
-                                        ];
-                                        $badge_class = $rol_classes[$participante['rol']] ?? 'badge-secondary';
-                                        ?>
-                                        <span class="badge <?php echo $badge_class; ?>">
-                                            <?php echo htmlspecialchars($participante['rol']); ?>
-                                        </span>
-                                    </td>
-                                    <td>
+                                <td>
+                                    <div class="participant-name">
+                                        <?php echo htmlspecialchars($participante['nombres'] . ' ' . $participante['apellidos']); ?>
+                                    </div>
+                                    <div class="participant-email">
+                                        <?php echo htmlspecialchars($participante['correo_electronico']); ?>
+                                    </div>
+                                </td>
+                                <td>
+                                    <?php echo htmlspecialchars($participante['numero_identificacion']); ?>
+                                </td>
+                                <td>
+                                    <?php echo htmlspecialchars($participante['evento_nombre']); ?>
+                                </td>
+                                <td>
+                                    <span class="badge badge-role">
+                                        <?php echo htmlspecialchars($participante['rol']); ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <?php if ($participante['tiene_certificado'] > 0): ?>
+                                        <span class="badge badge-success">Generado</span>
+                                    <?php else: ?>
+                                        <span class="badge badge-pending">Pendiente</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <div class="actions">
                                         <?php if ($participante['tiene_certificado'] > 0): ?>
-                                            <span class="badge badge-success">✓ Generado</span>
+                                            <a href="../certificados/descargar.php?participante_id=<?php echo $participante['id']; ?>" class="btn-sm btn-view">Ver</a>
                                         <?php else: ?>
-                                            <span class="badge badge-secondary">Pendiente</span>
+                                            <form method="POST" action="generar_individual.php" style="display: inline;">
+                                                <input type="hidden" name="participante_id" value="<?php echo $participante['id']; ?>">
+                                                <button type="submit" class="btn-sm btn-generate" onclick="return confirm('¿Generar certificado para <?php echo htmlspecialchars($participante['nombres'] . ' ' . $participante['apellidos']); ?>?')">
+                                                    Generar
+                                                </button>
+                                            </form>
                                         <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <div class="actions">
-                                            <?php if ($participante['tiene_certificado'] > 0): ?>
-                                                <a href="../certificados/descargar.php?participante_id=<?php echo $participante['id']; ?>" class="btn-sm btn-view">Ver Certificado</a>
-                                            <?php else: ?>
-                                                <a href="../certificados/generar.php?participante_id=<?php echo $participante['id']; ?>" class="btn-sm btn-edit">Generar Certificado</a>
-                                            <?php endif; ?>
-                                            <?php if ($_SESSION['rol'] === 'admin'): ?>
-                                                <a href="?eliminar=<?php echo $participante['id']; ?>" class="btn-sm btn-delete" onclick="return confirm('¿Está seguro de eliminar este participante?')">Eliminar</a>
-                                            <?php endif; ?>
-                                        </div>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                <?php else: ?>
-                    <div class="empty-state">
-                        <div style="font-size: 3rem; margin-bottom: 1rem; color: #dee2e6;">👥</div>
-                        <h3>No hay participantes registrados</h3>
-                        <p>Comience cargando participantes desde un archivo CSV</p>
-                        <a href="cargar.php" class="btn-primary" style="margin-top: 1rem; display: inline-block;">Cargar Participantes</a>
-                    </div>
-                <?php endif; ?>
-            </div>
+                                        
+                                        <a href="editar.php?id=<?php echo $participante['id']; ?>" class="btn-sm btn-edit">Editar</a>
+                                        
+                                        <?php if ($_SESSION['rol'] === 'admin'): ?>
+                                            <a href="?eliminar=<?php echo $participante['id']; ?>" class="btn-sm btn-delete" onclick="return confirm('¿Eliminar participante?')">Eliminar</a>
+                                        <?php endif; ?>
+                                    </div>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php else: ?>
+                <div class="empty-state">
+                    <h3>No hay participantes</h3>
+                    <p>No se encontraron participantes que coincidan con los criterios de búsqueda.</p>
+                    <a href="cargar.php" class="btn btn-primary" style="margin-top: 1rem;">Cargar participantes</a>
+                </div>
+            <?php endif; ?>
         </div>
     </div>
+    
+    <script>
+        // Auto-ocultar mensajes después de 5 segundos
+        document.addEventListener('DOMContentLoaded', function() {
+            const alerts = document.querySelectorAll('.alert-success');
+            alerts.forEach(alert => {
+                setTimeout(() => {
+                    alert.style.transition = 'opacity 0.3s';
+                    alert.style.opacity = '0';
+                    setTimeout(() => alert.remove(), 300);
+                }, 5000);
+            });
+        });
+        
+        // Envío de formularios de generación
+        document.addEventListener('DOMContentLoaded', function() {
+            const forms = document.querySelectorAll('form[action="generar_individual.php"]');
+            forms.forEach(form => {
+                form.addEventListener('submit', function() {
+                    const btn = this.querySelector('button[type="submit"]');
+                    btn.innerHTML = 'Generando...';
+                    btn.disabled = true;
+                });
+            });
+        });
+    </script>
 </body>
 </html>

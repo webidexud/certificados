@@ -1,5 +1,5 @@
 <?php
-// admin/eventos/plantillas.php - VERSIÓN ACTUALIZADA CON NÚMERO DE IDENTIFICACIÓN
+// admin/eventos/plantillas.php - VERSIÓN FUNCIONAL LIGERA
 require_once '../../config/config.php';
 require_once '../../includes/funciones.php';
 
@@ -8,6 +8,15 @@ verificarAutenticacion();
 $evento_id = isset($_GET['evento_id']) ? intval($_GET['evento_id']) : 0;
 $error = '';
 $success = '';
+
+// Manejar mensajes de redirección
+if (isset($_GET['msg']) && isset($_GET['text'])) {
+    if ($_GET['msg'] === 'success') {
+        $success = urldecode($_GET['text']);
+    } elseif ($_GET['msg'] === 'error') {
+        $error = urldecode($_GET['text']);
+    }
+}
 
 if (!$evento_id) {
     header('Location: listar.php');
@@ -46,38 +55,37 @@ if ($_POST && isset($_FILES['archivo_plantilla'])) {
     $archivo = $_FILES['archivo_plantilla'];
     
     if (empty($rol) || empty($nombre_plantilla)) {
-        $error = 'Por favor, complete todos los campos obligatorios';
+        $error = 'Complete todos los campos obligatorios';
     } elseif ($archivo['error'] !== UPLOAD_ERR_OK) {
-        $error = 'Error al subir el archivo: ' . $archivo['error'];
+        $error = 'Error al subir archivo: ' . $archivo['error'];
     } else {
         $extension = strtolower(pathinfo($archivo['name'], PATHINFO_EXTENSION));
         
         if ($extension !== 'svg') {
-            $error = 'Solo se permiten archivos SVG (.svg)';
+            $error = 'Solo archivos SVG permitidos';
         } else {
             try {
-                // Leer y validar contenido SVG
+                // Leer contenido SVG
                 $contenido_svg = file_get_contents($archivo['tmp_name']);
                 
                 if (empty($contenido_svg)) {
-                    throw new Exception("El archivo está vacío");
+                    throw new Exception("Archivo vacío");
                 }
                 
-                // Validar que es un SVG válido
                 if (strpos($contenido_svg, '<svg') === false) {
-                    throw new Exception("El archivo no parece ser un SVG válido");
+                    throw new Exception("No es un SVG válido");
                 }
                 
-                // Variables requeridas (incluyendo número de identificación)
+                // Variables obligatorias
                 $variables_requeridas = [
                     '{{nombres}}', 
                     '{{apellidos}}', 
                     '{{evento_nombre}}', 
                     '{{codigo_verificacion}}',
-                    '{{numero_identificacion}}'  // NUEVA VARIABLE REQUERIDA
+                    '{{numero_identificacion}}'
                 ];
-                $variables_faltantes = [];
                 
+                $variables_faltantes = [];
                 foreach ($variables_requeridas as $variable) {
                     if (strpos($contenido_svg, $variable) === false) {
                         $variables_faltantes[] = $variable;
@@ -85,142 +93,130 @@ if ($_POST && isset($_FILES['archivo_plantilla'])) {
                 }
                 
                 if (!empty($variables_faltantes)) {
-                    $error = 'La plantilla SVG debe contener las siguientes variables obligatorias: ' . implode(', ', $variables_faltantes);
+                    $error = 'Variables obligatorias faltantes: ' . implode(', ', $variables_faltantes);
                 } else {
-                    // Generar nombre único para el archivo
-                    $nombre_archivo = 'plantilla_' . $evento_id . '_' . $rol . '_' . time() . '.svg';
+                    // Generar nombre único
+                    $nombre_archivo = 'plantilla_' . $evento_id . '_' . preg_replace('/[^a-zA-Z0-9]/', '_', $rol) . '_' . time() . '.svg';
                     $ruta_destino = TEMPLATE_PATH . $nombre_archivo;
                     
-                    // Limpiar y optimizar SVG
-                    $svg_limpio = limpiarSVG($contenido_svg);
+                    // Limpiar SVG
+                    $contenido_svg = limpiarContenidoSVG($contenido_svg);
+                    $dimensiones = extraerDimensionesSVG($contenido_svg);
+                    
+                    // Crear directorio
+                    if (!is_dir(TEMPLATE_PATH)) {
+                        mkdir(TEMPLATE_PATH, 0755, true);
+                    }
                     
                     // Guardar archivo
-                    if (file_put_contents($ruta_destino, $svg_limpio)) {
-                        // Extraer variables disponibles del SVG
-                        preg_match_all('/\{\{([^}]+)\}\}/', $svg_limpio, $matches);
-                        $variables_disponibles = array_unique($matches[1]);
-                        
-                        // Extraer dimensiones del SVG
-                        $dimensiones = extraerDimensionesSVG($svg_limpio);
-                        
-                        // Verificar si ya existe una plantilla para este rol
-                        $stmt = $db->prepare("SELECT id FROM plantillas_certificados WHERE evento_id = ? AND rol = ?");
-                        $stmt->execute([$evento_id, $rol]);
-                        $plantilla_existente = $stmt->fetch();
-                        
-                        if ($plantilla_existente) {
-                            // Actualizar plantilla existente
-                            $stmt = $db->prepare("
-                                UPDATE plantillas_certificados 
-                                SET archivo_plantilla = ?, variables_disponibles = ?, nombre_plantilla = ?, 
-                                    ancho = ?, alto = ?, updated_at = CURRENT_TIMESTAMP
-                                WHERE id = ?
-                            ");
-                            $stmt->execute([
-                                $nombre_archivo,
-                                json_encode($variables_disponibles),
-                                $nombre_plantilla,
-                                $dimensiones['ancho'],
-                                $dimensiones['alto'],
-                                $plantilla_existente['id']
-                            ]);
-                            
-                            registrarAuditoria('UPDATE', 'plantillas_certificados', $plantilla_existente['id']);
-                            $success = "✅ Plantilla SVG actualizada exitosamente para el rol: <strong>$rol</strong><br>📏 Dimensiones: {$dimensiones['ancho']}x{$dimensiones['alto']}px<br>🔧 Variables: " . count($variables_disponibles);
-                        } else {
-                            // Crear nueva plantilla
-                            $stmt = $db->prepare("
-                                INSERT INTO plantillas_certificados (evento_id, rol, archivo_plantilla, variables_disponibles, nombre_plantilla, ancho, alto) 
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
-                            ");
-                            $stmt->execute([
-                                $evento_id,
-                                $rol,
-                                $nombre_archivo,
-                                json_encode($variables_disponibles),
-                                $nombre_plantilla,
-                                $dimensiones['ancho'],
-                                $dimensiones['alto']
-                            ]);
-                            
-                            registrarAuditoria('CREATE', 'plantillas_certificados', $db->lastInsertId());
-                            $success = "✅ Plantilla SVG creada exitosamente para el rol: <strong>$rol</strong><br>📏 Dimensiones: {$dimensiones['ancho']}x{$dimensiones['alto']}px<br>🔧 Variables encontradas: " . count($variables_disponibles);
-                        }
-                        
-                        // Recargar plantillas
-                        $stmt = $db->prepare("SELECT * FROM plantillas_certificados WHERE evento_id = ? ORDER BY rol, created_at DESC");
-                        $stmt->execute([$evento_id]);
-                        $plantillas = $stmt->fetchAll();
-                        
-                    } else {
-                        throw new Exception("Error al guardar el archivo SVG");
+                    if (file_put_contents($ruta_destino, $contenido_svg) === false) {
+                        throw new Exception("Error al guardar SVG");
                     }
+                    
+                    // Verificar si existe plantilla para este rol
+                    $stmt = $db->prepare("SELECT id FROM plantillas_certificados WHERE evento_id = ? AND rol = ?");
+                    $stmt->execute([$evento_id, $rol]);
+                    $plantilla_existente = $stmt->fetch();
+                    
+                    if ($plantilla_existente) {
+                        // Actualizar
+                        $stmt = $db->prepare("UPDATE plantillas_certificados SET nombre_plantilla = ?, archivo_plantilla = ?, ancho = ?, alto = ?, updated_at = NOW() WHERE id = ?");
+                        $stmt->execute([$nombre_plantilla, $nombre_archivo, $dimensiones['ancho'], $dimensiones['alto'], $plantilla_existente['id']]);
+                        $success = 'Plantilla actualizada: ' . $rol;
+                    } else {
+                        // Insertar nueva
+                        $stmt = $db->prepare("INSERT INTO plantillas_certificados (evento_id, rol, nombre_plantilla, archivo_plantilla, ancho, alto, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())");
+                        $stmt->execute([$evento_id, $rol, $nombre_plantilla, $nombre_archivo, $dimensiones['ancho'], $dimensiones['alto']]);
+                        $success = 'Plantilla creada: ' . $rol;
+                    }
+                    
+                    // Recargar plantillas
+                    $stmt = $db->prepare("SELECT * FROM plantillas_certificados WHERE evento_id = ? ORDER BY rol, created_at DESC");
+                    $stmt->execute([$evento_id]);
+                    $plantillas = $stmt->fetchAll();
                 }
-                
             } catch (Exception $e) {
-                $error = 'Error al procesar la plantilla SVG: ' . $e->getMessage();
+                $error = "Error: " . $e->getMessage();
             }
         }
     }
 }
 
 // Eliminar plantilla
-if (isset($_GET['eliminar'])) {
+if (isset($_GET['eliminar']) && !empty($_GET['eliminar'])) {
     $plantilla_id = intval($_GET['eliminar']);
     
-    try {
-        // Obtener información de la plantilla antes de eliminar
-        $stmt = $db->prepare("SELECT * FROM plantillas_certificados WHERE id = ? AND evento_id = ?");
-        $stmt->execute([$plantilla_id, $evento_id]);
-        $plantilla = $stmt->fetch();
-        
-        if ($plantilla) {
-            // Eliminar archivo físico
-            $ruta_archivo = TEMPLATE_PATH . $plantilla['archivo_plantilla'];
-            if (file_exists($ruta_archivo)) {
-                unlink($ruta_archivo);
+    if ($plantilla_id > 0) {
+        try {
+            // Primero verificar si la plantilla existe (sin restricción de evento)
+            $stmt = $db->prepare("SELECT * FROM plantillas_certificados WHERE id = ?");
+            $stmt->execute([$plantilla_id]);
+            $plantilla_eliminar = $stmt->fetch();
+            
+            if ($plantilla_eliminar) {
+                // Verificar que pertenece al evento actual
+                if ($plantilla_eliminar['evento_id'] != $evento_id) {
+                    $error = 'No tiene permisos para eliminar esta plantilla';
+                } else {
+                    // Eliminar archivo físico si existe
+                    $ruta_archivo = TEMPLATE_PATH . $plantilla_eliminar['archivo_plantilla'];
+                    if (file_exists($ruta_archivo)) {
+                        @unlink($ruta_archivo); // @ para evitar warnings si no se puede eliminar
+                    }
+                    
+                    // Eliminar de base de datos
+                    $stmt = $db->prepare("DELETE FROM plantillas_certificados WHERE id = ?");
+                    $resultado = $stmt->execute([$plantilla_id]);
+                    
+                    if ($resultado) {
+                        $success = 'Plantilla eliminada correctamente: ' . $plantilla_eliminar['nombre_plantilla'];
+                    } else {
+                        $error = 'Error al eliminar plantilla de la base de datos';
+                    }
+                }
+            } else {
+                $error = 'La plantilla ya no existe o fue eliminada previamente';
             }
             
-            // Eliminar registro de la base de datos
-            $stmt = $db->prepare("DELETE FROM plantillas_certificados WHERE id = ?");
-            $stmt->execute([$plantilla_id]);
+            // Siempre recargar plantillas para mostrar estado actual
+            $stmt = $db->prepare("SELECT * FROM plantillas_certificados WHERE evento_id = ? ORDER BY rol, created_at DESC");
+            $stmt->execute([$evento_id]);
+            $plantillas = $stmt->fetchAll();
             
-            registrarAuditoria('DELETE', 'plantillas_certificados', $plantilla_id, $plantilla);
-            mostrarMensaje('success', 'Plantilla SVG eliminada exitosamente');
+        } catch (Exception $e) {
+            $error = "Error al eliminar plantilla: " . $e->getMessage();
         }
-        
-        header("Location: plantillas.php?evento_id=$evento_id");
-        exit;
-        
-    } catch (Exception $e) {
-        $error = 'Error al eliminar la plantilla: ' . $e->getMessage();
+    } else {
+        $error = 'ID de plantilla inválido';
     }
+    
+    // Redireccionar para limpiar URL y evitar eliminación accidental en refresh
+    $redirect_url = "plantillas.php?evento_id=" . $evento_id;
+    if ($success) {
+        $redirect_url .= "&msg=success&text=" . urlencode($success);
+    } elseif ($error) {
+        $redirect_url .= "&msg=error&text=" . urlencode($error);
+    }
+    header("Location: " . $redirect_url);
+    exit;
 }
 
-// Funciones auxiliares para SVG
-function limpiarSVG($contenido_svg) {
-    // Limpiar el SVG de posibles elementos maliciosos
-    $svg_limpio = $contenido_svg;
+// Funciones auxiliares
+function limpiarContenidoSVG($contenido_svg) {
+    $contenido_svg = preg_replace('/<script[^>]*>.*?<\/script>/is', '', $contenido_svg);
+    $contenido_svg = preg_replace('/on\w+\s*=\s*["\'][^"\']*["\']/i', '', $contenido_svg);
     
-    // Remover scripts y elementos peligrosos
-    $elementos_peligrosos = ['<script', '<iframe', '<object', '<embed', '<link', 'javascript:', 'data:'];
-    foreach ($elementos_peligrosos as $elemento) {
-        $svg_limpio = str_ireplace($elemento, '', $svg_limpio);
+    if (strpos($contenido_svg, '<?xml') === false) {
+        $contenido_svg = '<?xml version="1.0" encoding="UTF-8"?>' . "\n" . $contenido_svg;
     }
     
-    // Asegurar que tenga la declaración XML
-    if (strpos($svg_limpio, '<?xml') === false) {
-        $svg_limpio = '<?xml version="1.0" encoding="UTF-8"?>' . "\n" . $svg_limpio;
-    }
-    
-    return $svg_limpio;
+    return $contenido_svg;
 }
 
 function extraerDimensionesSVG($contenido_svg) {
-    $ancho = 1200; // Valor por defecto
+    $ancho = 1200;
     $alto = 850;
     
-    // Buscar atributos width y height en el SVG
     if (preg_match('/width=["\']([^"\']+)["\']/', $contenido_svg, $matches)) {
         $ancho = intval($matches[1]);
     }
@@ -229,7 +225,6 @@ function extraerDimensionesSVG($contenido_svg) {
         $alto = intval($matches[1]);
     }
     
-    // Si no se encuentran, buscar en viewBox
     if (preg_match('/viewBox=["\']([^"\']+)["\']/', $contenido_svg, $matches)) {
         $viewBox = explode(' ', $matches[1]);
         if (count($viewBox) >= 4) {
@@ -240,13 +235,19 @@ function extraerDimensionesSVG($contenido_svg) {
     
     return ['ancho' => $ancho, 'alto' => $alto];
 }
+
+if (!function_exists('formatearRol')) {
+    function formatearRol($rol) {
+        return ucfirst(strtolower($rol));
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Plantillas SVG de Certificados</title>
+    <title>Plantillas - <?php echo htmlspecialchars($evento['nombre']); ?></title>
     <style>
         * {
             margin: 0;
@@ -256,665 +257,704 @@ function extraerDimensionesSVG($contenido_svg) {
         
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f8f9fa;
+            background: linear-gradient(135deg, #f8fffe 0%, #e8f7f5 100%);
             line-height: 1.6;
-        }
-        
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 1rem 0;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        .header-content {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .logo h1 { font-size: 1.5rem; }
-        .user-info { display: flex; align-items: center; gap: 1rem; }
-        
-        .btn-logout {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 0.5rem 1rem;
-            text-decoration: none;
-            border-radius: 5px;
-            transition: background 0.3s;
-        }
-        
-        .btn-logout:hover { background: rgba(255,255,255,0.3); }
-        
-        .nav {
-            background: white;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        .nav-content {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 20px;
-        }
-        
-        .nav ul {
-            list-style: none;
-            display: flex;
-            gap: 2rem;
-        }
-        
-        .nav a {
-            display: block;
-            padding: 1rem 0;
-            text-decoration: none;
-            color: #333;
-            font-weight: 500;
-            transition: color 0.3s;
-            border-bottom: 3px solid transparent;
-        }
-        
-        .nav a:hover, .nav a.active {
-            color: #667eea;
-            border-bottom-color: #667eea;
+            min-height: 100vh;
         }
         
         .container {
             max-width: 1200px;
-            margin: 2rem auto;
-            padding: 0 20px;
-        }
-        
-        .page-header {
+            margin: 20px auto;
             background: white;
-            padding: 2rem;
-            border-radius: 10px;
-            margin-bottom: 2rem;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 120, 135, 0.1);
+            overflow: hidden;
+            backdrop-filter: blur(10px);
         }
         
-        .breadcrumb {
-            color: #666;
-            margin-bottom: 1rem;
-            font-size: 0.9rem;
-        }
-        
-        .breadcrumb a {
-            color: #667eea;
-            text-decoration: none;
-        }
-        
-        .page-title h2 {
-            color: #333;
-            font-size: 2rem;
-            margin-bottom: 0.5rem;
-        }
-        
-        .event-info {
-            background: #e3f2fd;
-            padding: 1rem;
-            border-radius: 8px;
-            border-left: 4px solid #2196f3;
-        }
-        
-        .card {
-            background: white;
-            padding: 2rem;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
-        }
-        
-        .form-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1rem;
-            margin-bottom: 1.5rem;
-        }
-        
-        .form-group {
-            margin-bottom: 1.5rem;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 0.5rem;
-            color: #333;
-            font-weight: 500;
-        }
-        
-        .required { color: #dc3545; }
-        
-        input, select, textarea {
-            width: 100%;
-            padding: 0.75rem;
-            border: 2px solid #e1e1e1;
-            border-radius: 5px;
-            font-size: 1rem;
-            transition: border-color 0.3s;
-        }
-        
-        input:focus, select:focus, textarea:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        
-        .file-input-wrapper {
+        .header {
+            background: linear-gradient(135deg, #007887 0%, #3db8ab 50%, #68d6ca 100%);
+            color: white;
+            padding: 40px 30px;
             position: relative;
-            display: inline-block;
-            width: 100%;
+            overflow: hidden;
         }
         
-        .file-input {
+        .header::before {
+            content: '';
             position: absolute;
-            opacity: 0;
+            top: -50%;
+            right: -20%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            animation: float 6s ease-in-out infinite;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0px) rotate(0deg); }
+            50% { transform: translateY(-20px) rotate(180deg); }
+        }
+        
+        .universidad-logo {
+            text-align: right;
+            margin-bottom: 20px;
+            font-size: 12px;
+            opacity: 0.9;
+            letter-spacing: 0.5px;
+            position: relative;
+            z-index: 2;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 300;
+            margin-bottom: 10px;
+            position: relative;
+            z-index: 2;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.95;
+            position: relative;
+            z-index: 2;
+        }
+        
+        .nav {
+            background: rgba(104, 214, 202, 0.1);
+            padding: 20px 30px;
+            border-bottom: 1px solid rgba(104, 214, 202, 0.2);
+        }
+        
+        .nav a {
+            display: inline-block;
+            margin-right: 20px;
+            color: #007887;
+            text-decoration: none;
+            font-weight: 500;
+            padding: 12px 20px;
+            border-radius: 25px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .nav a::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
             width: 100%;
             height: 100%;
-            cursor: pointer;
+            background: linear-gradient(135deg, #007887 0%, #3db8ab 100%);
+            transition: left 0.3s ease;
+            z-index: -1;
         }
         
-        .file-input-display {
-            display: flex;
-            align-items: center;
-            padding: 1rem;
-            border: 3px dashed #667eea;
-            border-radius: 10px;
-            background: linear-gradient(135deg, #f8f9ff 0%, #f0f4ff 100%);
-            cursor: pointer;
-            transition: all 0.3s;
-            min-height: 80px;
+        .nav a:hover::before {
+            left: 0;
         }
         
-        .file-input-display:hover {
-            border-color: #5a67d8;
-            background: linear-gradient(135deg, #f0f4ff 0%, #e8efff 100%);
+        .nav a:hover {
+            color: white;
             transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(0, 120, 135, 0.3);
         }
         
-        .file-icon {
-            font-size: 3rem;
-            margin-right: 1rem;
-            color: #667eea;
+        .content {
+            padding: 40px 30px;
         }
-        
-        .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 1rem 2rem;
-            border: none;
-            border-radius: 5px;
-            font-size: 1rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: transform 0.2s;
-        }
-        
-        .btn-primary:hover { transform: translateY(-2px); }
-        
-        .btn-back {
-            background: #6c757d;
-            color: white;
-            padding: 0.75rem 1.5rem;
-            text-decoration: none;
-            border-radius: 5px;
-            font-weight: 500;
-            transition: background 0.3s;
-        }
-        
-        .btn-back:hover { background: #5a6268; }
         
         .alert {
-            padding: 1rem;
-            margin-bottom: 1rem;
-            border-radius: 5px;
-            text-align: center;
+            padding: 20px 25px;
+            margin: 25px 0;
+            border-radius: 15px;
+            border: none;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .alert::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 5px;
+            height: 100%;
+            background: currentColor;
         }
         
         .alert-error {
-            background-color: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
+            background: linear-gradient(135deg, #fef2f2 0%, #fdf2f8 100%);
+            color: #991b1b;
+            border-left: 5px solid #e63946;
         }
         
         .alert-success {
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
+            background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+            color: #166534;
+            border-left: 5px solid #57cc99;
         }
         
-        .plantillas-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 2rem;
-            margin-top: 2rem;
+        .section-title {
+            color: #007887;
+            font-size: 1.8rem;
+            font-weight: 400;
+            margin: 40px 0 25px 0;
+            padding-bottom: 15px;
+            border-bottom: 3px solid #68d6ca;
+            position: relative;
         }
         
-        .plantilla-card {
-            border: 2px solid #e9ecef;
-            border-radius: 15px;
-            padding: 1.5rem;
-            transition: all 0.3s;
-            background: white;
+        .section-title::after {
+            content: '';
+            position: absolute;
+            bottom: -3px;
+            left: 0;
+            width: 60px;
+            height: 3px;
+            background: #007887;
+        }
+        
+        .help {
+            background: linear-gradient(135deg, #007887 0%, #07796b 50%, #3db8ab 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 20px;
+            margin: 30px 0;
             position: relative;
             overflow: hidden;
+            box-shadow: 0 15px 35px rgba(0, 120, 135, 0.2);
         }
         
-        .plantilla-card::before {
-            content: '🎨';
+        .help::before {
+            content: '';
             position: absolute;
-            top: -10px;
-            right: -10px;
-            font-size: 6rem;
-            opacity: 0.1;
-            z-index: 1;
+            top: -50%;
+            left: -50%;
+            width: 200px;
+            height: 200px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            animation: pulse 4s ease-in-out infinite;
         }
         
-        .plantilla-card:hover {
-            border-color: #667eea;
-            transform: translateY(-5px);
-            box-shadow: 0 15px 35px rgba(102, 126, 234, 0.2);
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.7; }
+            50% { transform: scale(1.1); opacity: 0.3; }
         }
         
-        .plantilla-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1rem;
+        .help h3 {
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            font-weight: 400;
             position: relative;
             z-index: 2;
         }
         
-        .rol-badge {
-            padding: 0.4rem 1rem;
-            border-radius: 25px;
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+        .help p {
+            margin-bottom: 15px;
+            line-height: 1.8;
+            position: relative;
+            z-index: 2;
         }
         
-        .rol-participante { background: #d4edda; color: #155724; }
-        .rol-ponente { background: #fff3cd; color: #856404; }
-        .rol-organizador { background: #d1ecf1; color: #0c5460; }
-        .rol-moderador { background: #e2e3e5; color: #383d41; }
-        .rol-asistente { background: #f8d7da; color: #721c24; }
-        
-        .plantilla-preview {
-            background: #f8f9fa;
+        .highlight {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 3px 8px;
             border-radius: 8px;
-            padding: 1rem;
-            margin: 1rem 0;
-            max-height: 200px;
+            font-weight: 500;
+        }
+        
+        .form-section {
+            background: linear-gradient(135deg, #ffffff 0%, #f8fffe 100%);
+            padding: 35px;
+            border-radius: 20px;
+            margin: 30px 0;
+            border: 2px solid rgba(104, 214, 202, 0.1);
+            box-shadow: 0 10px 30px rgba(0, 120, 135, 0.05);
+        }
+        
+        .form-group {
+            margin-bottom: 25px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 10px;
+            font-weight: 600;
+            color: #3b4044;
+            font-size: 1rem;
+        }
+        
+        .required {
+            color: #e63946;
+            font-weight: bold;
+        }
+        
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 15px 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            font-size: 1rem;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            background: white;
+        }
+        
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #007887;
+            box-shadow: 0 0 0 4px rgba(0, 120, 135, 0.1);
+            transform: translateY(-2px);
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            text-decoration: none;
+            margin: 8px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
             overflow: hidden;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border: 2px dashed #dee2e6;
+            font-size: 1rem;
         }
         
-        .svg-miniature {
-            max-width: 100%;
-            max-height: 150px;
-            opacity: 0.8;
-            transition: opacity 0.3s;
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            transition: width 0.3s ease, height 0.3s ease;
         }
         
-        .plantilla-card:hover .svg-miniature {
+        .btn:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #007887 0%, #3db8ab 100%);
+            color: white;
+            box-shadow: 0 8px 25px rgba(0, 120, 135, 0.3);
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 35px rgba(0, 120, 135, 0.4);
+        }
+        
+        .btn-secondary {
+            background: linear-gradient(135deg, #3db8ab 0%, #68d6ca 100%);
+            color: white;
+            box-shadow: 0 8px 25px rgba(61, 184, 171, 0.3);
+        }
+        
+        .btn-secondary:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 35px rgba(61, 184, 171, 0.4);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #e63946 0%, #dc2626 100%);
+            color: white;
+            box-shadow: 0 8px 25px rgba(230, 57, 70, 0.3);
+        }
+        
+        .btn-danger:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 35px rgba(230, 57, 70, 0.4);
+        }
+        
+        .plantilla-item {
+            background: linear-gradient(135deg, #ffffff 0%, #f8fffe 100%);
+            border: 2px solid transparent;
+            padding: 30px;
+            margin: 25px 0;
+            border-radius: 20px;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .plantilla-item::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, rgba(104, 214, 202, 0.1) 0%, rgba(61, 184, 171, 0.1) 100%);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        .plantilla-item:hover {
+            border-color: #68d6ca;
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(104, 214, 202, 0.2);
+        }
+        
+        .plantilla-item:hover::before {
             opacity: 1;
         }
         
-        .plantilla-actions {
-            display: flex;
-            gap: 0.5rem;
-            margin-top: 1rem;
+        .plantilla-header {
+            font-weight: 600;
+            font-size: 1.4rem;
+            margin-bottom: 15px;
+            color: #007887;
             position: relative;
             z-index: 2;
         }
         
-        .btn-sm {
-            padding: 0.5rem 1rem;
-            font-size: 0.8rem;
-            border-radius: 6px;
-            text-decoration: none;
-            font-weight: 500;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            gap: 0.25rem;
+        .plantilla-info {
+            color: #666;
+            margin-bottom: 20px;
+            line-height: 1.7;
+            position: relative;
+            z-index: 2;
         }
         
-        .btn-edit { background: #28a745; color: white; }
-        .btn-delete { background: #dc3545; color: white; }
-        .btn-preview { background: #17a2b8; color: white; }
-        .btn-download { background: #6f42c1; color: white; }
-        
-        .btn-sm:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-        }
-        
-        .variables-info {
-            background: #f8f9fa;
-            padding: 1rem;
-            border-radius: 8px;
-            margin: 1rem 0;
-            border-left: 4px solid #667eea;
-        }
-        
-        .variables-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.5rem;
-            margin-top: 0.5rem;
-        }
-        
-        .variable-tag {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 0.25rem 0.6rem;
+        .variables {
+            background: linear-gradient(135deg, rgba(104, 214, 202, 0.1) 0%, rgba(61, 184, 171, 0.1) 100%);
+            padding: 20px;
             border-radius: 15px;
-            font-size: 0.75rem;
+            margin: 20px 0;
+            border: 1px solid rgba(104, 214, 202, 0.2);
+            position: relative;
+            z-index: 2;
+        }
+        
+        .variable {
+            background: linear-gradient(135deg, #007887 0%, #3db8ab 100%);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            margin: 4px;
+            display: inline-block;
+            font-size: 0.85rem;
             font-family: 'Courier New', monospace;
             font-weight: 500;
+            box-shadow: 0 4px 10px rgba(0, 120, 135, 0.2);
+            transition: transform 0.2s ease;
         }
         
-        .help-box {
-            background: linear-gradient(135deg, #e8f5e8 0%, #d4edda 100%);
-            border: 2px solid #28a745;
-            border-radius: 12px;
-            padding: 2rem;
-            margin-bottom: 2rem;
-            position: relative;
-            overflow: hidden;
+        .variable:hover {
+            transform: scale(1.05);
         }
         
-        .help-box::before {
-            content: '📋';
-            position: absolute;
-            top: -20px;
-            right: -20px;
-            font-size: 8rem;
-            opacity: 0.1;
+        pre {
+            background: linear-gradient(135deg, #f8fffe 0%, #ecfdf5 100%);
+            padding: 25px;
+            border: 2px solid #68d6ca;
+            border-radius: 15px;
+            overflow-x: auto;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            box-shadow: inset 0 2px 10px rgba(104, 214, 202, 0.1);
         }
         
-        .help-box h3 {
-            color: #155724;
-            margin-bottom: 1rem;
-            font-size: 1.3rem;
+        .status-ok {
+            color: #57cc99;
+            font-weight: bold;
         }
         
-        .help-box ul {
-            margin-left: 1.5rem;
-            color: #155724;
+        .status-error {
+            color: #e63946;
+            font-weight: bold;
         }
         
-        .help-box li {
-            margin-bottom: 0.75rem;
-            line-height: 1.6;
+        /* Animaciones adicionales */
+        .container {
+            animation: slideUp 0.6s ease-out;
         }
         
-        .empty-state {
-            text-align: center;
-            padding: 4rem;
-            color: #666;
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
         
-        .empty-state .icon {
-            font-size: 5rem;
-            margin-bottom: 1rem;
-            opacity: 0.3;
+        .plantilla-item {
+            animation: fadeInUp 0.6s ease-out;
+            animation-fill-mode: both;
         }
         
-        .svg-dimensions {
-            background: #e3f2fd;
-            padding: 0.5rem;
-            border-radius: 5px;
-            font-size: 0.85rem;
-            color: #1976d2;
-            margin-top: 0.5rem;
+        .plantilla-item:nth-child(1) { animation-delay: 0.1s; }
+        .plantilla-item:nth-child(2) { animation-delay: 0.2s; }
+        .plantilla-item:nth-child(3) { animation-delay: 0.3s; }
+        
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
         
-        .download-template {
-            background: #fff3cd;
-            border: 2px solid #ffc107;
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-            text-align: center;
-        }
-        
-        .download-template h4 {
-            color: #856404;
-            margin-bottom: 1rem;
-        }
-        
-        .btn-download-template {
-            background: #ffc107;
-            color: #212529;
-            padding: 1rem 2rem;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            text-decoration: none;
-            display: inline-block;
-            transition: all 0.3s;
-        }
-        
-        .btn-download-template:hover {
-            background: #e0a800;
-            transform: translateY(-2px);
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container {
+                margin: 10px;
+                border-radius: 15px;
+            }
+            
+            .header {
+                padding: 30px 20px;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .content {
+                padding: 30px 20px;
+            }
+            
+            .form-section {
+                padding: 25px 20px;
+            }
+            
+            .nav a {
+                display: block;
+                margin: 5px 0;
+            }
         }
     </style>
 </head>
 <body>
-    <header class="header">
-        <div class="header-content">
-            <div class="logo">
-                <h1>🎨 Sistema de Certificados SVG</h1>
-            </div>
-            <div class="user-info">
-                <span>Bienvenido, Usuario Demo</span>
-                <a href="#" class="btn-logout">Cerrar Sesión</a>
-            </div>
-        </div>
-    </header>
-    
-    <nav class="nav">
-        <div class="nav-content">
-            <ul>
-                <li><a href="#">Dashboard</a></li>
-                <li><a href="#" class="active">Eventos</a></li>
-                <li><a href="#">Participantes</a></li>
-                <li><a href="#">Certificados</a></li>
-            </ul>
-        </div>
-    </nav>
-    
     <div class="container">
-        <div class="page-header">
-            <div class="breadcrumb">
-                <a href="#">Eventos</a> > <a href="#">Evento Demo</a> > Plantillas SVG
+        <div class="header">
+            <div class="universidad-logo" style="text-align: right; margin-bottom: 10px; color: rgba(255,255,255,0.9); font-size: 12px;">
+                UNIVERSIDAD DISTRITAL FRANCISCO JOSÉ DE CALDAS<br>
+                Sistema de Gestión de Proyectos y Oficina de Extensión (SGPOE)
             </div>
-            <div class="page-title">
-                <h2>🎨 Plantillas SVG de Certificados</h2>
-            </div>
-            <div class="event-info">
-                <strong>📅 Evento:</strong> Evento Demostración<br>
-                <strong>📍 Fechas:</strong> 01/06/2025 - 30/06/2025
-            </div>
+            <h1>🎨 Plantillas SVG - <?php echo htmlspecialchars($evento['nombre']); ?></h1>
+            <p><strong>Evento:</strong> <?php echo htmlspecialchars($evento['nombre']); ?> | <strong>Fechas:</strong> <?php echo date('d/m/Y', strtotime($evento['fecha_inicio'])); ?> - <?php echo date('d/m/Y', strtotime($evento['fecha_fin'])); ?></p>
         </div>
         
-        
-        
-        <div class="help-box">
-            <h3>🎯 Cómo crear plantillas SVG con todas las variables</h3>
-            <ul>
-                <li><strong>🎨 Formato SVG:</strong> Cree un archivo SVG vectorial para máxima calidad y escalabilidad</li>
-                <li><strong>📏 Dimensiones recomendadas:</strong> 1200x850px para formato horizontal profesional</li>
-                <li><strong>🔧 Variables obligatorias:</strong> 
-                    <code>{{nombres}}</code>, <code>{{apellidos}}</code>, <code>{{evento_nombre}}</code>, 
-                    <code>{{codigo_verificacion}}</code>, <strong><code>{{numero_identificacion}}</code></strong>
-                </li>
-                <li><strong>🎛️ Variables opcionales:</strong> 
-                    <code>{{fecha_inicio}}</code>, <code>{{fecha_fin}}</code>, <code>{{rol}}</code>, 
-                    <code>{{entidad_organizadora}}</code>, <code>{{modalidad}}</code>, <code>{{lugar}}</code>, 
-                    <code>{{horas_duracion}}</code>, <code>{{url_verificacion}}</code>
-                </li>
-                <li><strong>✨ Extras disponibles:</strong> 
-                    <code>{{numero_certificado}}</code>, <code>{{fecha_generacion}}</code>, 
-                    <code>{{año}}</code>, <code>{{mes}}</code>, <code>{{dia}}</code>
-                </li>
-                <li><strong>📝 Uso:</strong> Coloque las variables dentro de elementos <code>&lt;text&gt;</code> del SVG</li>
-                <li><strong>🔗 Código QR:</strong> Incluya un área para código QR que se generará automáticamente</li>
-                <li><strong>🛡️ Seguridad:</strong> No incluya scripts ni elementos externos por seguridad</li>
-            </ul>
+        <div class="nav">
+            <a href="../index.php">Dashboard</a>
+            <a href="listar.php">← Volver a Eventos</a>
+            <a href="../certificados/generar.php">Generar Certificados</a>
         </div>
         
-        <div class="card">
-            <h3 style="margin-bottom: 1.5rem;">➕ Subir Nueva Plantilla SVG</h3>
-            <form method="POST" enctype="multipart/form-data">
-                <div class="form-grid">
-                    <div class="form-group">
-                        <label for="nombre_plantilla">Nombre de la Plantilla <span class="required">*</span></label>
-                        <input type="text" id="nombre_plantilla" name="nombre_plantilla" required placeholder="Ej: Certificado Moderno con QR">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="rol">Rol del Participante <span class="required">*</span></label>
-                        <select id="rol" name="rol" required>
-                            <option value="">Seleccione un rol</option>
-                            <option value="Participante">Participante</option>
-                            <option value="Ponente">Ponente</option>
-                            <option value="Organizador">Organizador</option>
-                            <option value="Moderador">Moderador</option>
-                            <option value="Asistente">Asistente</option>
-                            <option value="General">General (para todos los roles)</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <label for="archivo_plantilla">Archivo SVG <span class="required">*</span></label>
-                    <div class="file-input-wrapper">
-                        <input type="file" id="archivo_plantilla" name="archivo_plantilla" class="file-input" accept=".svg" required>
-                        <div class="file-input-display">
-                            <div class="file-icon">🎨</div>
-                            <div>
-                                <div style="font-weight: 600; font-size: 1.1rem; color: #333;">Seleccionar archivo SVG</div>
-                                <div style="font-size: 0.9rem; color: #666; margin-top: 0.25rem;">
-                                    Debe incluir: {{nombres}}, {{apellidos}}, {{evento_nombre}}, {{codigo_verificacion}}, {{numero_identificacion}}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div style="text-align: center;">
-                    <button type="submit" class="btn-primary">🚀 Subir Plantilla SVG</button>
-                    <a href="#" class="btn-back">← Volver a Eventos</a>
-                </div>
-            </form>
+        <?php if ($error): ?>
+            <div class="alert alert-error">
+                <strong>Error:</strong> <?php echo $error; ?>
+            </div>
+        <?php endif; ?>
+        
+        <?php if ($success): ?>
+            <div class="alert alert-success">
+                <strong>Éxito:</strong> <?php echo $success; ?>
+            </div>
+        <?php endif; ?>
+        
+        <div class="help">
+            <h3>🎯 Guía para Plantillas SVG - IDEXUD</h3>
+            <p><strong class="highlight">Variables Obligatorias:</strong> {{nombres}}, {{apellidos}}, {{evento_nombre}}, {{codigo_verificacion}}, {{numero_identificacion}}</p>
+            <p><strong class="highlight">Variables Opcionales:</strong> {{fecha_inicio}}, {{fecha_fin}}, {{rol}}, {{entidad_organizadora}}, {{modalidad}}, {{lugar}}, {{numero_certificado}}, {{url_verificacion}}</p>
+            <p><strong>📐 Dimensiones recomendadas:</strong> 1200x850px (horizontal) siguiendo estándares institucionales</p>
+            <p><strong>🎨 Colores institucionales:</strong> Use la paleta oficial SGPOE (Azul Petróleo #007887, Verde Petróleo #07796b, Turquesa #3db8ab, #68d6ca)</p>
         </div>
         
-        <!-- Ejemplo de plantilla existente -->
-        <div class="card">
-            <h3 style="margin-bottom: 1.5rem;">🎨 Plantillas SVG Configuradas (Demo)</h3>
-            <div class="plantillas-grid">
-                <div class="plantilla-card">
+        <!-- Formulario de subida -->
+        <h2>Subir Nueva Plantilla SVG</h2>
+        <form method="POST" enctype="multipart/form-data">
+            <div class="form-group">
+                <label for="nombre_plantilla">Nombre de la Plantilla *</label>
+                <input type="text" id="nombre_plantilla" name="nombre_plantilla" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="rol">Rol del Participante *</label>
+                <select id="rol" name="rol" required>
+                    <option value="">Seleccionar rol</option>
+                    <option value="Participante">Participante</option>
+                    <option value="Ponente">Ponente</option>
+                    <option value="Organizador">Organizador</option>
+                    <option value="Moderador">Moderador</option>
+                    <option value="Asistente">Asistente</option>
+                    <option value="Conferencista">Conferencista</option>
+                    <option value="Instructor">Instructor</option>
+                    <option value="General">General (todos los roles)</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="archivo_plantilla">Archivo SVG *</label>
+                <input type="file" id="archivo_plantilla" name="archivo_plantilla" accept=".svg" required>
+            </div>
+            
+            <button type="submit" class="btn btn-primary">Subir Plantilla</button>
+        </form>
+        
+        <!-- Lista de plantillas -->
+        <h2>Plantillas Configuradas</h2>
+        
+        <?php if (empty($plantillas)): ?>
+            <p>No hay plantillas configuradas para este evento.</p>
+        <?php else: ?>
+            <?php foreach ($plantillas as $plantilla): ?>
+                <div class="plantilla-item">
                     <div class="plantilla-header">
-                        <h4 style="margin: 0; color: #333; font-size: 1.1rem;">
-                            Certificado Moderno Demo
-                        </h4>
-                        <span class="rol-badge rol-participante">
-                            Participante
+                        <?php echo htmlspecialchars($plantilla['nombre_plantilla']); ?>
+                        <span style="background: #007bff; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px;">
+                            <?php echo formatearRol($plantilla['rol']); ?>
                         </span>
                     </div>
                     
-                    <div class="plantilla-preview">
-                        <div style="color: #667eea; font-size: 3rem;">🎨</div>
+                    <div class="plantilla-info">
+                        <strong>Archivo:</strong> <?php echo $plantilla['archivo_plantilla']; ?> | 
+                        <strong>Dimensiones:</strong> <?php echo $plantilla['ancho']; ?>x<?php echo $plantilla['alto']; ?>px | 
+                        <strong>Creado:</strong> <?php echo date('d/m/Y H:i', strtotime($plantilla['created_at'])); ?>
+                        <?php if ($plantilla['updated_at'] != $plantilla['created_at']): ?>
+                            | <strong>Actualizado:</strong> <?php echo date('d/m/Y H:i', strtotime($plantilla['updated_at'])); ?>
+                        <?php endif; ?>
                     </div>
                     
-                    <div class="svg-dimensions">
-                        📏 <strong>Dimensiones:</strong> 1200px × 850px
-                    </div>
+                    <?php 
+                    $archivo_existe = file_exists(TEMPLATE_PATH . $plantilla['archivo_plantilla']);
+                    ?>
                     
-                    <div class="variables-info">
-                        <strong>🔧 Variables disponibles (10):</strong>
-                        <div class="variables-list">
-                            <span class="variable-tag variable-required">{{nombres}}</span>
-                            <span class="variable-tag variable-required">{{apellidos}}</span>
-                            <span class="variable-tag variable-required">{{evento_nombre}}</span>
-                            <span class="variable-tag variable-required">{{codigo_verificacion}}</span>
-                            <span class="variable-tag variable-required">{{numero_identificacion}}</span>
-                            <span class="variable-tag variable-optional">{{fecha_inicio}}</span>
-                            <span class="variable-tag variable-optional">{{fecha_fin}}</span>
-                            <span class="variable-tag variable-optional">{{entidad_organizadora}}</span>
-                            <span class="variable-tag variable-optional">{{modalidad}}</span>
-                            <span class="variable-tag variable-optional">{{rol}}</span>
+                    <?php if (!$archivo_existe): ?>
+                        <div class="alert alert-error">
+                            Archivo SVG no encontrado en el servidor
                         </div>
+                    <?php endif; ?>
+                    
+                    <div class="variables">
+                        <strong>Variables soportadas:</strong>
+                        <span class="variable">nombres</span>
+                        <span class="variable">apellidos</span>
+                        <span class="variable">evento_nombre</span>
+                        <span class="variable">codigo_verificacion</span>
+                        <span class="variable">numero_identificacion</span>
+                        <span class="variable">fecha_inicio</span>
+                        <span class="variable">fecha_fin</span>
+                        <span class="variable">rol</span>
+                        <span class="variable">entidad_organizadora</span>
                     </div>
                     
-                    <div style="margin: 1rem 0; color: #666; font-size: 0.85rem;">
-                        <div><strong>📁 Archivo:</strong> plantilla_demo.svg</div>
-                        <div><strong>📅 Creado:</strong> 09/06/2025 16:30</div>
-                    </div>
-                    
-                    <div class="plantilla-actions">
-                        <a href="#" class="btn-sm btn-preview">
-                            👁️ Vista Previa
-                        </a>
-                        <a href="#" class="btn-sm btn-download">
-                            📥 Descargar
-                        </a>
-                        <a href="#" class="btn-sm btn-delete" onclick="return confirm('¿Está seguro de eliminar esta plantilla SVG?')">
+                    <div>
+                        <?php if ($archivo_existe): ?>
+                            <a href="preview_plantilla.php?id=<?php echo $plantilla['id']; ?>" class="btn btn-secondary" target="_blank">
+                                👁️ Vista Previa
+                            </a>
+                            <a href="descargar_plantilla.php?id=<?php echo $plantilla['id']; ?>" class="btn btn-secondary">
+                                📥 Descargar
+                            </a>
+                        <?php else: ?>
+                            <span style="color: #dc3545; font-size: 12px;">⚠️ Archivo no disponible</span>
+                        <?php endif; ?>
+                        <a href="?evento_id=<?php echo $evento_id; ?>&eliminar=<?php echo $plantilla['id']; ?>" 
+                           class="btn btn-danger" 
+                           onclick="return confirm('¿Está seguro de eliminar la plantilla: <?php echo htmlspecialchars($plantilla['nombre_plantilla']); ?>?\n\nEsta acción no se puede deshacer.')">
                             🗑️ Eliminar
                         </a>
                     </div>
                 </div>
-            </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
+        
+        <!-- Ejemplo básico -->
+        <h2 class="section-title">📋 Ejemplo de Plantilla SVG con Identidad IDEXUD</h2>
+        <pre>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;svg width="1200" height="850" xmlns="http://www.w3.org/2000/svg"&gt;
+  &lt;!-- Fondo institucional --&gt;
+  &lt;rect width="100%" height="100%" fill="#ffffff" stroke="#007887" stroke-width="3"/&gt;
+  
+  &lt;!-- Header con colores institucionales --&gt;
+  &lt;rect x="0" y="0" width="1200" height="120" fill="url(#gradientHeader)"/&gt;
+  &lt;defs&gt;
+    &lt;linearGradient id="gradientHeader" x1="0%" y1="0%" x2="100%" y2="0%"&gt;
+      &lt;stop offset="0%" style="stop-color:#007887"/&gt;
+      &lt;stop offset="100%" style="stop-color:#3db8ab"/&gt;
+    &lt;/linearGradient&gt;
+  &lt;/defs&gt;
+  
+  &lt;!-- Título principal --&gt;
+  &lt;text x="600" y="200" text-anchor="middle" font-size="32" font-weight="bold" fill="#007887"&gt;
+    CERTIFICADO DE PARTICIPACIÓN
+  &lt;/text&gt;
+  
+  &lt;!-- Subtítulo institucional --&gt;
+  &lt;text x="600" y="230" text-anchor="middle" font-size="16" fill="#07796b"&gt;
+    Universidad Distrital Francisco José de Caldas - IDEXUD
+  &lt;/text&gt;
+  
+  &lt;!-- Nombre del participante --&gt;
+  &lt;text x="600" y="320" text-anchor="middle" font-size="28" font-weight="bold" fill="#3db8ab"&gt;
+    {{nombres}} {{apellidos}}
+  &lt;/text&gt;
+  
+  &lt;!-- Número de identificación --&gt;
+  &lt;text x="600" y="360" text-anchor="middle" font-size="16" fill="#666666"&gt;
+    Documento de Identidad: {{numero_identificacion}}
+  &lt;/text&gt;
+  
+  &lt;!-- Evento --&gt;
+  &lt;text x="600" y="450" text-anchor="middle" font-size="22" fill="#007887"&gt;
+    {{evento_nombre}}
+  &lt;/text&gt;
+  
+  &lt;!-- Fechas del evento --&gt;
+  &lt;text x="600" y="500" text-anchor="middle" font-size="18" fill="#07796b"&gt;
+    Período: {{fecha_inicio}} - {{fecha_fin}}
+  &lt;/text&gt;
+  
+  &lt;!-- Entidad organizadora --&gt;
+  &lt;text x="600" y="640" text-anchor="middle" font-size="16" fill="#3db8ab"&gt;
+    {{entidad_organizadora}}
+  &lt;/text&gt;
+  
+  &lt;!-- Footer con código de verificación --&gt;
+  &lt;rect x="50" y="750" width="1100" height="60" fill="#68d6ca" opacity="0.3" rx="5"/&gt;
+  &lt;text x="600" y="780" text-anchor="middle" font-size="14" fill="#007887"&gt;
+    Código de Verificación: {{codigo_verificacion}} | Consulte en: idexud.udistrital.edu.co
+  &lt;/text&gt;
+&lt;/svg&gt;</pre>
+    
+        <div class="help">
+            <h3>🎨 Recomendaciones de Diseño Institucional</h3>
+            <p><strong>✅ Colores oficiales SGPOE:</strong></p>
+            <ul style="margin-left: 20px; line-height: 1.8;">
+                <li><span class="highlight">Azul Petróleo (#007887)</span> - Color principal, títulos importantes</li>
+                <li><span class="highlight">Verde Petróleo (#07796b)</span> - Elementos secundarios, subtítulos</li>
+                <li><span class="highlight">Turquesa Medio (#3db8ab)</span> - Nombres, elementos interactivos</li>
+                <li><span class="highlight">Turquesa Claro (#68d6ca)</span> - Fondos, elementos de acento</li>
+            </ul>
+            <p><strong>📐 Tipografía:</strong> Use Roboto (Google Fonts) para consistencia con el sistema</p>
+            <p><strong>🏛️ Identidad:</strong> Incluya referencias a "Universidad Distrital" e "IDEXUD" según corresponda</p>
         </div>
     </div>
     
     <script>
-        // Mostrar información del archivo SVG seleccionado
-        document.getElementById('archivo_plantilla').addEventListener('change', function(e) {
-            const file = e.target.files[0];
-            const display = document.querySelector('.file-input-display');
-            
-            if (file) {
-                if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
-                    display.innerHTML = `
-                        <div class="file-icon">✅</div>
-                        <div>
-                            <div style="font-weight: 600; color: #28a745;">${file.name}</div>
-                            <div style="font-size: 0.9rem; color: #666;">
-                                Tamaño: ${(file.size / 1024).toFixed(1)} KB | Tipo: SVG
-                            </div>
-                            <div style="font-size: 0.8rem; color: #28a745; margin-top: 0.25rem;">
-                                ✅ Archivo SVG válido seleccionado
-                            </div>
-                        </div>
-                    `;
-                } else {
-                    display.innerHTML = `
-                        <div class="file-icon">❌</div>
-                        <div>
-                            <div style="font-weight: 600; color: #dc3545;">${file.name}</div>
-                            <div style="font-size: 0.9rem; color: #dc3545;">
-                                Error: Solo se permiten archivos SVG
-                            </div>
-                        </div>
-                    `;
-                    this.value = ''; // Limpiar la selección
-                }
-            }
-        });
-        
-
-        // Validar formulario antes de enviar
+        // Validación simple del formulario
         document.querySelector('form').addEventListener('submit', function(e) {
             const archivo = document.getElementById('archivo_plantilla').files[0];
             const nombre = document.getElementById('nombre_plantilla').value.trim();
@@ -922,171 +962,22 @@ function extraerDimensionesSVG($contenido_svg) {
             
             if (!archivo || !nombre || !rol) {
                 e.preventDefault();
-                alert('❌ Por favor, complete todos los campos obligatorios:\n• Nombre de la plantilla\n• Rol del participante\n• Archivo SVG');
+                alert('Complete todos los campos obligatorios');
                 return false;
             }
             
             if (!archivo.name.toLowerCase().endsWith('.svg')) {
                 e.preventDefault();
-                alert('❌ Error de formato:\nSolo se permiten archivos SVG (.svg).\n\n💡 Consejo: Use la plantilla de ejemplo para asegurar compatibilidad.');
+                alert('Solo se permiten archivos SVG');
                 return false;
             }
             
-            // Validar tamaño del archivo (máximo 5MB)
             if (archivo.size > 5 * 1024 * 1024) {
                 e.preventDefault();
-                alert('❌ Archivo demasiado grande:\nEl archivo SVG no puede superar 5MB.\n\n💡 Optimice su SVG para reducir el tamaño.');
+                alert('El archivo es demasiado grande (máximo 5MB)');
                 return false;
             }
-            
-            // Mostrar mensaje de carga
-            const submitBtn = this.querySelector('button[type="submit"]');
-            const originalText = submitBtn.innerHTML;
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = '⏳ Procesando SVG...';
-            
-            // Restaurar botón si hay error (timeout de seguridad)
-            setTimeout(() => {
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = originalText;
-            }, 10000);
-            
-            return true;
         });
-        
-        // Mejorar la vista previa de las plantillas SVG
-        document.addEventListener('DOMContentLoaded', function() {
-            document.querySelectorAll('.plantilla-preview svg').forEach(svg => {
-                svg.style.maxWidth = '100%';
-                svg.style.maxHeight = '150px';
-                svg.style.border = '1px solid #dee2e6';
-                svg.style.borderRadius = '4px';
-                svg.style.background = 'white';
-            });
-        });
-        
-        // Destacar variables requeridas vs opcionales
-        const style = document.createElement('style');
-        style.textContent = `
-            .variable-required {
-                background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important;
-                animation: pulse 2s infinite;
-                position: relative;
-            }
-            .variable-required::before {
-                content: '⚠️';
-                position: absolute;
-                left: -15px;
-                font-size: 10px;
-            }
-            .variable-optional {
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-            }
-            @keyframes pulse {
-                0% { opacity: 1; }
-                50% { opacity: 0.7; }
-                100% { opacity: 1; }
-            }
-        `;
-        document.head.appendChild(style);
-        
-        // Tooltip para variables con información detallada
-        document.querySelectorAll('.variable-tag').forEach(tag => {
-            const variable = tag.textContent.replace(/[{}]/g, '');
-            const isRequired = ['nombres', 'apellidos', 'evento_nombre', 'codigo_verificacion', 'numero_identificacion'].includes(variable);
-            
-            const tooltips = {
-                'nombres': 'Nombre(s) del participante',
-                'apellidos': 'Apellido(s) del participante', 
-                'numero_identificacion': 'Número de cédula o documento del participante',
-                'evento_nombre': 'Nombre completo del evento',
-                'codigo_verificacion': 'Código único para verificar autenticidad',
-                'fecha_inicio': 'Fecha de inicio del evento',
-                'fecha_fin': 'Fecha de finalización del evento',
-                'entidad_organizadora': 'Organización que realiza el evento',
-                'modalidad': 'Virtual, presencial o híbrida',
-                'rol': 'Rol del participante en el evento',
-                'lugar': 'Ubicación física o virtual del evento',
-                'horas_duracion': 'Duración total en horas académicas',
-                'url_verificacion': 'URL completa para verificar el certificado',
-                'fecha_generacion': 'Fecha y hora de emisión del certificado',
-                'año': 'Año actual',
-                'numero_certificado': 'Número secuencial del certificado'
-            };
-            
-            tag.title = `${isRequired ? '🔴 OBLIGATORIO' : '🟢 OPCIONAL'}: ${tooltips[variable] || variable}`;
-                
-            if (isRequired) {
-                tag.style.fontWeight = 'bold';
-                tag.classList.add('variable-required');
-            } else {
-                tag.classList.add('variable-optional');
-            }
-        });
-        
-        // Efecto hover mejorado para las tarjetas
-        document.querySelectorAll('.plantilla-card').forEach(card => {
-            card.addEventListener('mouseenter', function() {
-                this.style.transform = 'translateY(-8px) scale(1.02)';
-                this.style.boxShadow = '0 20px 40px rgba(102, 126, 234, 0.3)';
-            });
-            
-            card.addEventListener('mouseleave', function() {
-                this.style.transform = 'translateY(0) scale(1)';
-                this.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)';
-            });
-        });
-        
-        // Validación en tiempo real del nombre de plantilla
-        document.getElementById('nombre_plantilla').addEventListener('input', function(e) {
-            const valor = e.target.value;
-            const contador = document.getElementById('nombre-contador');
-            
-            if (!contador) {
-                const contadorElement = document.createElement('div');
-                contadorElement.id = 'nombre-contador';
-                contadorElement.style.fontSize = '0.8rem';
-                contadorElement.style.color = '#666';
-                contadorElement.style.marginTop = '0.25rem';
-                e.target.parentNode.appendChild(contadorElement);
-            }
-            
-            const length = valor.length;
-            const maxLength = 100;
-            document.getElementById('nombre-contador').innerHTML = 
-                `${length}/${maxLength} caracteres ${length > maxLength ? '❌ Demasiado largo' : length > 50 ? '⚠️' : '✅'}`;
-        });
-        
-        // Auto-guardar borrador del formulario
-        const form = document.querySelector('form');
-        const inputs = form.querySelectorAll('input, select');
-        
-        inputs.forEach(input => {
-            // Cargar valores guardados
-            const savedValue = localStorage.getItem(`plantilla_draft_${input.name}`);
-            if (savedValue && input.type !== 'file') {
-                input.value = savedValue;
-            }
-            
-            // Guardar cambios
-            input.addEventListener('change', function() {
-                if (this.type !== 'file') {
-                    localStorage.setItem(`plantilla_draft_${this.name}`, this.value);
-                }
-            });
-        });
-        
-        // Limpiar borrador al enviar exitosamente
-        form.addEventListener('submit', function() {
-            setTimeout(() => {
-                inputs.forEach(input => {
-                    localStorage.removeItem(`plantilla_draft_${input.name}`);
-                });
-            }, 1000);
-        });
-        
-        console.log('🎨 Sistema de plantillas SVG inicializado correctamente');
-        console.log('📋 Todas las funciones de validación y descarga están operativas');
     </script>
 </body>
 </html>
