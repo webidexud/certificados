@@ -1,25 +1,169 @@
--- sql/update_plantillas_svg.sql
--- Actualización completa para soporte SVG
+-- ===============================================
+-- BASE DE DATOS: Sistema de Certificados Digitales
+-- Versión simplificada sin consultas a information_schema
+-- ===============================================
 
--- 1. Actualizar tabla de plantillas para SVG
-ALTER TABLE plantillas_certificados 
-ADD COLUMN nombre_plantilla VARCHAR(255) NOT NULL DEFAULT 'Plantilla Sin Nombre' AFTER rol,
-ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP AFTER variables_disponibles,
-ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER created_at;
+-- Crear base de datos
+CREATE DATABASE IF NOT EXISTS certificados_idexud 
+CHARACTER SET utf8mb4 
+COLLATE utf8mb4_unicode_ci;
 
--- 2. Actualizar tabla de certificados para soportar SVG
-ALTER TABLE certificados 
-ADD COLUMN tipo_archivo ENUM('pdf', 'svg') DEFAULT 'pdf' AFTER hash_validacion,
-ADD COLUMN dimensiones JSON AFTER tipo_archivo,
-ADD COLUMN archivo_pdf_backup VARCHAR(255) AFTER dimensiones;
+USE certificados_idexud;
 
--- 3. Índices para optimización
-CREATE INDEX idx_plantillas_evento_rol ON plantillas_certificados(evento_id, rol);
-CREATE INDEX idx_plantillas_created ON plantillas_certificados(created_at);
-CREATE INDEX idx_certificados_tipo ON certificados(tipo_archivo);
+-- ===============================================
+-- 1. TABLA DE USUARIOS
+-- ===============================================
+CREATE TABLE usuarios (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(50) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    nombre VARCHAR(100) NOT NULL,
+    email VARCHAR(100) NOT NULL UNIQUE,
+    rol ENUM('admin', 'usuario') DEFAULT 'usuario',
+    estado ENUM('activo', 'inactivo') DEFAULT 'activo',
+    ultimo_acceso TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    INDEX idx_username (username),
+    INDEX idx_email (email),
+    INDEX idx_estado (estado)
+) ENGINE=InnoDB;
 
--- 4. Crear tabla para versiones de plantillas
-CREATE TABLE IF NOT EXISTS versiones_plantillas (
+-- ===============================================
+-- 2. TABLA DE EVENTOS
+-- ===============================================
+CREATE TABLE eventos (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(255) NOT NULL,
+    descripcion TEXT,
+    fecha_inicio DATE NOT NULL,
+    fecha_fin DATE NOT NULL,
+    modalidad ENUM('presencial', 'virtual', 'hibrida') NOT NULL DEFAULT 'presencial',
+    entidad_organizadora VARCHAR(255) NOT NULL,
+    lugar VARCHAR(255),
+    horas_duracion INT UNSIGNED,
+    estado ENUM('activo', 'inactivo') DEFAULT 'activo',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    INDEX idx_nombre (nombre),
+    INDEX idx_fechas (fecha_inicio, fecha_fin),
+    INDEX idx_estado (estado),
+    INDEX idx_modalidad (modalidad),
+    INDEX idx_entidad (entidad_organizadora)
+) ENGINE=InnoDB;
+
+-- ===============================================
+-- 3. TABLA DE PARTICIPANTES
+-- ===============================================
+CREATE TABLE participantes (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    evento_id INT NOT NULL,
+    nombres VARCHAR(100) NOT NULL,
+    apellidos VARCHAR(100) NOT NULL,
+    numero_identificacion VARCHAR(50) NOT NULL,
+    correo_electronico VARCHAR(100) NOT NULL,
+    rol VARCHAR(50) NOT NULL DEFAULT 'Participante',
+    telefono VARCHAR(20),
+    institucion VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (evento_id) REFERENCES eventos(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_participante_evento (evento_id, numero_identificacion),
+    
+    INDEX idx_evento (evento_id),
+    INDEX idx_identificacion (numero_identificacion),
+    INDEX idx_correo (correo_electronico),
+    INDEX idx_rol (rol),
+    INDEX idx_nombres (nombres, apellidos),
+    INDEX idx_institucion (institucion)
+) ENGINE=InnoDB;
+
+-- ===============================================
+-- 4. TABLA DE PLANTILLAS DE CERTIFICADOS (SVG)
+-- ===============================================
+CREATE TABLE plantillas_certificados (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    evento_id INT NOT NULL,
+    rol VARCHAR(50) NOT NULL DEFAULT 'General',
+    nombre_plantilla VARCHAR(255) NOT NULL DEFAULT 'Plantilla Sin Nombre',
+    archivo_plantilla VARCHAR(255) NOT NULL,
+    variables_disponibles JSON,
+    ancho INT UNSIGNED DEFAULT 842,
+    alto INT UNSIGNED DEFAULT 595,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (evento_id) REFERENCES eventos(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_evento_rol (evento_id, rol),
+    
+    INDEX idx_evento_rol (evento_id, rol),
+    INDEX idx_archivo (archivo_plantilla),
+    INDEX idx_created (created_at),
+    INDEX idx_dimensiones (ancho, alto)
+) ENGINE=InnoDB;
+
+-- ===============================================
+-- 5. TABLA DE CERTIFICADOS
+-- ===============================================
+CREATE TABLE certificados (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    participante_id INT NOT NULL,
+    evento_id INT NOT NULL,
+    codigo_verificacion VARCHAR(20) NOT NULL UNIQUE,
+    archivo_pdf VARCHAR(255) NOT NULL,
+    hash_validacion VARCHAR(64) NOT NULL,
+    tipo_archivo ENUM('pdf', 'svg') DEFAULT 'pdf',
+    dimensiones JSON,
+    archivo_pdf_backup VARCHAR(255),
+    estado ENUM('generado', 'descargado', 'verificado') DEFAULT 'generado',
+    descargas INT UNSIGNED DEFAULT 0,
+    fecha_generacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    fecha_descarga TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (participante_id) REFERENCES participantes(id) ON DELETE CASCADE,
+    FOREIGN KEY (evento_id) REFERENCES eventos(id) ON DELETE CASCADE,
+    
+    INDEX idx_codigo (codigo_verificacion),
+    INDEX idx_participante (participante_id),
+    INDEX idx_evento (evento_id),
+    INDEX idx_tipo (tipo_archivo),
+    INDEX idx_fecha_generacion (fecha_generacion),
+    INDEX idx_estado (estado),
+    INDEX idx_hash (hash_validacion)
+) ENGINE=InnoDB;
+
+-- ===============================================
+-- 6. TABLA DE AUDITORÍA
+-- ===============================================
+CREATE TABLE auditoria (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    usuario VARCHAR(100),
+    accion VARCHAR(50) NOT NULL,
+    tabla_afectada VARCHAR(50) NOT NULL,
+    registro_id INT,
+    datos_anteriores JSON,
+    datos_nuevos JSON,
+    ip_address VARCHAR(45),
+    user_agent TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    INDEX idx_usuario (usuario),
+    INDEX idx_accion (accion),
+    INDEX idx_tabla (tabla_afectada),
+    INDEX idx_registro (registro_id),
+    INDEX idx_fecha (created_at),
+    INDEX idx_ip (ip_address)
+) ENGINE=InnoDB;
+
+-- ===============================================
+-- 7. TABLA DE VERSIONES DE PLANTILLAS
+-- ===============================================
+CREATE TABLE versiones_plantillas (
     id INT AUTO_INCREMENT PRIMARY KEY,
     plantilla_id INT NOT NULL,
     version INT NOT NULL DEFAULT 1,
@@ -27,11 +171,20 @@ CREATE TABLE IF NOT EXISTS versiones_plantillas (
     variables_disponibles JSON,
     notas_version TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
     FOREIGN KEY (plantilla_id) REFERENCES plantillas_certificados(id) ON DELETE CASCADE,
-    UNIQUE KEY unique_plantilla_version (plantilla_id, version)
-);
+    UNIQUE KEY unique_plantilla_version (plantilla_id, version),
+    
+    INDEX idx_plantilla (plantilla_id),
+    INDEX idx_version (version),
+    INDEX idx_created (created_at)
+) ENGINE=InnoDB;
 
--- 5. Vista para obtener plantillas con información completa
+-- ===============================================
+-- 8. VISTAS PARA CONSULTAS OPTIMIZADAS
+-- ===============================================
+
+-- Vista de plantillas completa con información del evento
 CREATE OR REPLACE VIEW vista_plantillas_completa AS
 SELECT 
     p.*,
@@ -40,17 +193,19 @@ SELECT
     e.fecha_fin,
     e.entidad_organizadora,
     e.modalidad,
-    (SELECT COUNT(*) FROM participantes part WHERE part.evento_id = e.id AND part.rol = p.rol) as participantes_rol,
+    (SELECT COUNT(*) FROM participantes part 
+     WHERE part.evento_id = e.id AND part.rol = p.rol) as participantes_rol,
     (SELECT COUNT(*) FROM certificados c 
      JOIN participantes part ON c.participante_id = part.id 
      WHERE part.evento_id = e.id AND part.rol = p.rol) as certificados_generados,
     (SELECT COUNT(*) FROM certificados c 
      JOIN participantes part ON c.participante_id = part.id 
-     WHERE part.evento_id = e.id AND part.rol = p.rol AND c.tipo_archivo = 'svg') as certificados_svg
+     WHERE part.evento_id = e.id AND part.rol = p.rol 
+     AND c.tipo_archivo = 'svg') as certificados_svg
 FROM plantillas_certificados p
 JOIN eventos e ON p.evento_id = e.id;
 
--- 6. Vista para estadísticas de certificados por tipo
+-- Vista de estadísticas de certificados por evento
 CREATE OR REPLACE VIEW vista_estadisticas_certificados AS
 SELECT 
     e.id as evento_id,
@@ -60,73 +215,46 @@ SELECT
     COUNT(DISTINCT CASE WHEN c.tipo_archivo = 'svg' THEN c.id END) as certificados_svg,
     COUNT(DISTINCT CASE WHEN c.tipo_archivo = 'pdf' THEN c.id END) as certificados_pdf,
     COUNT(DISTINCT CASE WHEN c.id IS NULL THEN p.id END) as sin_certificado,
-    ROUND((COUNT(DISTINCT c.id) / COUNT(DISTINCT p.id)) * 100, 2) as porcentaje_completado
+    ROUND((COUNT(DISTINCT c.id) / NULLIF(COUNT(DISTINCT p.id), 0)) * 100, 2) as porcentaje_completado,
+    MAX(c.fecha_generacion) as ultimo_certificado_generado
 FROM eventos e
 LEFT JOIN participantes p ON e.id = p.evento_id
 LEFT JOIN certificados c ON p.id = c.participante_id
 GROUP BY e.id, e.nombre;
 
--- 7. Trigger para crear versión automáticamente al actualizar plantilla
-DELIMITER //
-CREATE TRIGGER crear_version_plantilla_svg
-AFTER UPDATE ON plantillas_certificados
-FOR EACH ROW
-BEGIN
-    DECLARE max_version INT DEFAULT 0;
-    
-    -- Obtener la versión más alta
-    SELECT COALESCE(MAX(version), 0) INTO max_version 
-    FROM versiones_plantillas 
-    WHERE plantilla_id = NEW.id;
-    
-    -- Insertar nueva versión solo si cambió el archivo
-    IF OLD.archivo_plantilla != NEW.archivo_plantilla THEN
-        INSERT INTO versiones_plantillas (
-            plantilla_id, 
-            version, 
-            archivo_plantilla, 
-            variables_disponibles,
-            notas_version
-        ) VALUES (
-            NEW.id,
-            max_version + 1,
-            NEW.archivo_plantilla,
-            NEW.variables_disponibles,
-            CONCAT('Actualización automática SVG - ', NOW())
-        );
-    END IF;
-END//
-DELIMITER ;
+-- Vista de dashboard de plantillas SVG
+CREATE OR REPLACE VIEW vista_dashboard_plantillas AS
+SELECT 
+    e.id as evento_id,
+    e.nombre as evento_nombre,
+    e.fecha_inicio,
+    e.fecha_fin,
+    e.estado as evento_estado,
+    COUNT(DISTINCT p.id) as total_plantillas,
+    COUNT(DISTINCT p.rol) as roles_con_plantilla,
+    COUNT(DISTINCT part.id) as total_participantes,
+    COUNT(DISTINCT c.id) as total_certificados,
+    COUNT(DISTINCT CASE WHEN c.tipo_archivo = 'svg' THEN c.id END) as certificados_svg,
+    COUNT(DISTINCT CASE WHEN c.tipo_archivo = 'pdf' THEN c.id END) as certificados_pdf,
+    ROUND(
+        (COUNT(DISTINCT CASE WHEN c.tipo_archivo = 'svg' THEN c.id END) / 
+         NULLIF(COUNT(DISTINCT c.id), 0)) * 100, 1
+    ) as porcentaje_svg,
+    MAX(p.updated_at) as ultima_actualizacion_plantilla
+FROM eventos e
+LEFT JOIN plantillas_certificados p ON e.id = p.evento_id
+LEFT JOIN participantes part ON e.id = part.evento_id
+LEFT JOIN certificados c ON part.id = c.participante_id
+GROUP BY e.id, e.nombre, e.fecha_inicio, e.fecha_fin, e.estado
+ORDER BY e.fecha_inicio DESC;
 
--- 8. Procedimiento para limpiar archivos huérfanos
-DELIMITER //
-CREATE PROCEDURE LimpiarArchivosHuerfanos()
-BEGIN
-    DECLARE done INT DEFAULT FALSE;
-    DECLARE archivo VARCHAR(255);
-    DECLARE plantilla_cursor CURSOR FOR 
-        SELECT p.archivo_plantilla 
-        FROM plantillas_certificados p
-        LEFT JOIN eventos e ON p.evento_id = e.id
-        WHERE e.id IS NULL;
-    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
-    
-    -- Limpiar plantillas huérfanas
-    DELETE p FROM plantillas_certificados p
-    LEFT JOIN eventos e ON p.evento_id = e.id
-    WHERE e.id IS NULL;
-    
-    -- Limpiar certificados huérfanos
-    DELETE c FROM certificados c
-    LEFT JOIN participantes p ON c.participante_id = p.id
-    WHERE p.id IS NULL;
-    
-    SELECT ROW_COUNT() as archivos_limpiados;
-END//
-DELIMITER ;
+-- ===============================================
+-- 9. FUNCIONES ÚTILES (Simplificadas)
+-- ===============================================
 
--- 9. Función para obtener variables disponibles formateadas
 DELIMITER //
+
+-- Función para formatear variables disponibles
 CREATE FUNCTION FormatearVariablesSVG(variables_json JSON) 
 RETURNS TEXT
 READS SQL DATA
@@ -157,39 +285,32 @@ BEGIN
     
     RETURN resultado;
 END//
-DELIMITER ;
 
--- 10. Procedimiento para migrar certificados PDF existentes
-DELIMITER //
-CREATE PROCEDURE MigrarCertificadosExistentes()
+-- Función para contar certificados por tipo
+CREATE FUNCTION ContarCertificadosPorTipo(evento_id INT, tipo VARCHAR(10))
+RETURNS INT
+READS SQL DATA
+DETERMINISTIC
 BEGIN
-    DECLARE done INT DEFAULT FALSE;
-    DECLARE cert_id INT;
-    DECLARE cert_cursor CURSOR FOR 
-        SELECT id FROM certificados WHERE tipo_archivo IS NULL;
-    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+    DECLARE total INT DEFAULT 0;
     
-    OPEN cert_cursor;
-    read_loop: LOOP
-        FETCH cert_cursor INTO cert_id;
-        IF done THEN
-            LEAVE read_loop;
-        END IF;
-        
-        -- Actualizar certificados existentes como PDF
-        UPDATE certificados 
-        SET tipo_archivo = 'pdf' 
-        WHERE id = cert_id;
-        
-    END LOOP;
-    CLOSE cert_cursor;
+    SELECT COUNT(*) INTO total
+    FROM certificados c
+    JOIN participantes p ON c.participante_id = p.id
+    WHERE p.evento_id = evento_id AND c.tipo_archivo = tipo;
     
-    SELECT ROW_COUNT() as certificados_migrados;
+    RETURN total;
 END//
+
 DELIMITER ;
 
--- 11. Procedimiento para obtener estadísticas de plantillas por evento
+-- ===============================================
+-- 10. PROCEDIMIENTOS ALMACENADOS
+-- ===============================================
+
 DELIMITER //
+
+-- Procedimiento para estadísticas de plantillas por evento
 CREATE PROCEDURE EstadisticasPlantillasPorEvento(IN evento_id INT)
 BEGIN
     SELECT 
@@ -210,133 +331,90 @@ BEGIN
     WHERE e.id = evento_id
     GROUP BY e.id, e.nombre;
 END//
-DELIMITER ;
 
--- 12. Trigger para validar dimensiones SVG
-DELIMITER //
-CREATE TRIGGER validar_dimensiones_svg
-BEFORE INSERT ON plantillas_certificados
-FOR EACH ROW
+-- Procedimiento para limpiar archivos huérfanos
+CREATE PROCEDURE LimpiarArchivosHuerfanos()
 BEGIN
-    -- Validar dimensiones mínimas y máximas
-    IF NEW.ancho < 100 OR NEW.ancho > 5000 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'El ancho debe estar entre 100 y 5000 píxeles';
-    END IF;
+    DECLARE archivos_limpiados INT DEFAULT 0;
     
-    IF NEW.alto < 100 OR NEW.alto > 5000 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'El alto debe estar entre 100 y 5000 píxeles';
-    END IF;
+    -- Limpiar plantillas huérfanas
+    DELETE p FROM plantillas_certificados p
+    LEFT JOIN eventos e ON p.evento_id = e.id
+    WHERE e.id IS NULL;
     
-    -- Validar que el archivo termine en .svg
-    IF NOT (NEW.archivo_plantilla LIKE '%.svg') THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'El archivo debe ser de tipo SVG (.svg)';
-    END IF;
+    SET archivos_limpiados = ROW_COUNT();
+    
+    -- Limpiar certificados huérfanos
+    DELETE c FROM certificados c
+    LEFT JOIN participantes p ON c.participante_id = p.id
+    WHERE p.id IS NULL;
+    
+    SET archivos_limpiados = archivos_limpiados + ROW_COUNT();
+    
+    SELECT archivos_limpiados as archivos_limpiados;
 END//
-DELIMITER ;
 
--- 13. Función para contar certificados por tipo
-DELIMITER //
-CREATE FUNCTION ContarCertificadosPorTipo(evento_id INT, tipo VARCHAR(10))
-RETURNS INT
-READS SQL DATA
-DETERMINISTIC
+-- Procedimiento para migrar certificados existentes
+CREATE PROCEDURE MigrarCertificadosExistentes()
 BEGIN
-    DECLARE total INT DEFAULT 0;
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE cert_id INT;
+    DECLARE migrados INT DEFAULT 0;
+    DECLARE cert_cursor CURSOR FOR 
+        SELECT id FROM certificados WHERE tipo_archivo IS NULL;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
     
-    SELECT COUNT(*) INTO total
-    FROM certificados c
-    JOIN participantes p ON c.participante_id = p.id
-    WHERE p.evento_id = evento_id AND c.tipo_archivo = tipo;
+    OPEN cert_cursor;
+    read_loop: LOOP
+        FETCH cert_cursor INTO cert_id;
+        IF done THEN
+            LEAVE read_loop;
+        END IF;
+        
+        -- Actualizar certificados existentes como PDF
+        UPDATE certificados 
+        SET tipo_archivo = 'pdf' 
+        WHERE id = cert_id;
+        
+        SET migrados = migrados + 1;
+        
+    END LOOP;
+    CLOSE cert_cursor;
     
-    RETURN total;
+    SELECT migrados as certificados_migrados;
 END//
+
 DELIMITER ;
 
--- 14. Vista para dashboard de plantillas SVG
-CREATE OR REPLACE VIEW vista_dashboard_plantillas AS
-SELECT 
-    e.id as evento_id,
-    e.nombre as evento_nombre,
-    e.fecha_inicio,
-    e.fecha_fin,
-    e.estado as evento_estado,
-    COUNT(DISTINCT p.id) as total_plantillas,
-    COUNT(DISTINCT p.rol) as roles_con_plantilla,
-    COUNT(DISTINCT part.id) as total_participantes,
-    COUNT(DISTINCT c.id) as total_certificados,
-    COUNT(DISTINCT CASE WHEN c.tipo_archivo = 'svg' THEN c.id END) as certificados_svg,
-    COUNT(DISTINCT CASE WHEN c.tipo_archivo = 'pdf' THEN c.id END) as certificados_pdf,
-    ROUND(
-        (COUNT(DISTINCT CASE WHEN c.tipo_archivo = 'svg' THEN c.id END) / 
-         NULLIF(COUNT(DISTINCT c.id), 0)) * 100, 1
-    ) as porcentaje_svg,
-    MAX(p.updated_at) as ultima_actualizacion_plantilla
-FROM eventos e
-LEFT JOIN plantillas_certificados p ON e.id = p.evento_id
-LEFT JOIN participantes part ON e.id = part.evento_id
-LEFT JOIN certificados c ON part.id = c.participante_id
-GROUP BY e.id, e.nombre, e.fecha_inicio, e.fecha_fin, e.estado
-ORDER BY e.fecha_inicio DESC;
+-- ===============================================
+-- 11. ÍNDICES ADICIONALES PARA RENDIMIENTO
+-- ===============================================
 
--- 15. Insertar plantillas de ejemplo (opcionales)
--- Plantilla básica para eventos sin plantilla personalizada
-INSERT IGNORE INTO plantillas_certificados (
-    evento_id, 
-    rol, 
-    nombre_plantilla, 
-    archivo_plantilla, 
-    variables_disponibles,
-    ancho,
-    alto
-) VALUES (
-    0, -- ID especial para plantilla por defecto
-    'General',
-    'Plantilla SVG Por Defecto',
-    'plantilla_default.svg',
-    '["nombres", "apellidos", "evento_nombre", "codigo_verificacion", "fecha_inicio", "fecha_fin", "entidad_organizadora", "modalidad", "lugar", "horas_duracion", "rol", "fecha_generacion"]',
-    842,
-    595
-);
-
--- 16. Procedimiento para backup de plantillas
-DELIMITER //
-CREATE PROCEDURE BackupPlantillas()
-BEGIN
-    DECLARE backup_date VARCHAR(20);
-    SET backup_date = DATE_FORMAT(NOW(), '%Y%m%d_%H%i%s');
-    
-    -- Crear tabla de backup
-    SET @sql = CONCAT('CREATE TABLE plantillas_backup_', backup_date, ' AS SELECT * FROM plantillas_certificados');
-    PREPARE stmt FROM @sql;
-    EXECUTE stmt;
-    DEALLOCATE PREPARE stmt;
-    
-    -- Crear tabla de backup para versiones
-    SET @sql = CONCAT('CREATE TABLE versiones_plantillas_backup_', backup_date, ' AS SELECT * FROM versiones_plantillas');
-    PREPARE stmt FROM @sql;
-    EXECUTE stmt;
-    DEALLOCATE PREPARE stmt;
-    
-    SELECT CONCAT('Backup creado: plantillas_backup_', backup_date) as mensaje;
-END//
-DELIMITER ;
-
--- 17. Ejecutar migraciones necesarias
-CALL MigrarCertificadosExistentes();
-
--- 18. Crear índices adicionales para rendimiento
-CREATE INDEX idx_certificados_evento_tipo ON certificados(tipo_archivo);
-CREATE INDEX idx_plantillas_archivo ON plantillas_certificados(archivo_plantilla);
+-- Índices compuestos para consultas complejas
 CREATE INDEX idx_participantes_evento_rol ON participantes(evento_id, rol);
+CREATE INDEX idx_certificados_participante_evento ON certificados(participante_id, evento_id);
+CREATE INDEX idx_certificados_codigo_hash ON certificados(codigo_verificacion, hash_validacion);
+CREATE INDEX idx_auditoria_usuario_fecha ON auditoria(usuario, created_at);
+CREATE INDEX idx_auditoria_tabla_registro ON auditoria(tabla_afectada, registro_id);
 
--- 19. Configurar charset para soporte completo de caracteres
-ALTER TABLE plantillas_certificados CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-ALTER TABLE versiones_plantillas CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- ===============================================
+-- 12. DATOS INICIALES
+-- ===============================================
 
--- 20. Mensaje de finalización
-SELECT 
-    'Actualización completada para soporte SVG' as estado,
-    NOW() as fecha_actualizacion,
-    (SELECT COUNT(*) FROM plantillas_certificados) as total_plantillas,
-    (SELECT COUNT(*) FROM certificados WHERE tipo_archivo = 'svg') as certificados_svg_existentes,
-    'Sistema listo para generar certificados SVG' as mensaje;
+-- Crear usuario administrador por defecto
+INSERT INTO usuarios (username, password, nombre, email, rol) VALUES 
+('admin', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Administrador', 'admin@certificados.com', 'admin');
+-- Contraseña: password
+
+-- ===============================================
+-- 13. VERIFICACIÓN FINAL (Sin information_schema)
+-- ===============================================
+
+-- Mostrar resumen simple
+SELECT 'Base de datos certificados_idexud creada exitosamente' as estado, NOW() as fecha_creacion;
+
+-- Mostrar todas las tablas creadas
+SHOW TABLES;
+
+-- Ejecutar migración de certificados existentes
+CALL MigrarCertificadosExistentes();

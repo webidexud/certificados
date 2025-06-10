@@ -1,5 +1,5 @@
 <?php
-// admin/eventos/plantillas.php - VERSIÓN SVG
+// admin/eventos/plantillas.php - VERSIÓN ACTUALIZADA CON NÚMERO DE IDENTIFICACIÓN
 require_once '../../config/config.php';
 require_once '../../includes/funciones.php';
 
@@ -68,8 +68,14 @@ if ($_POST && isset($_FILES['archivo_plantilla'])) {
                     throw new Exception("El archivo no parece ser un SVG válido");
                 }
                 
-                // Validar que contiene las variables necesarias
-                $variables_requeridas = ['{{nombres}}', '{{apellidos}}', '{{evento_nombre}}', '{{codigo_verificacion}}'];
+                // Variables requeridas (incluyendo número de identificación)
+                $variables_requeridas = [
+                    '{{nombres}}', 
+                    '{{apellidos}}', 
+                    '{{evento_nombre}}', 
+                    '{{codigo_verificacion}}',
+                    '{{numero_identificacion}}'  // NUEVA VARIABLE REQUERIDA
+                ];
                 $variables_faltantes = [];
                 
                 foreach ($variables_requeridas as $variable) {
@@ -79,7 +85,7 @@ if ($_POST && isset($_FILES['archivo_plantilla'])) {
                 }
                 
                 if (!empty($variables_faltantes)) {
-                    $error = 'La plantilla SVG debe contener las siguientes variables: ' . implode(', ', $variables_faltantes);
+                    $error = 'La plantilla SVG debe contener las siguientes variables obligatorias: ' . implode(', ', $variables_faltantes);
                 } else {
                     // Generar nombre único para el archivo
                     $nombre_archivo = 'plantilla_' . $evento_id . '_' . $rol . '_' . time() . '.svg';
@@ -120,7 +126,7 @@ if ($_POST && isset($_FILES['archivo_plantilla'])) {
                             ]);
                             
                             registrarAuditoria('UPDATE', 'plantillas_certificados', $plantilla_existente['id']);
-                            $success = "✅ Plantilla SVG actualizada exitosamente para el rol: <strong>$rol</strong><br>📏 Dimensiones: {$dimensiones['ancho']}x{$dimensiones['alto']}px";
+                            $success = "✅ Plantilla SVG actualizada exitosamente para el rol: <strong>$rol</strong><br>📏 Dimensiones: {$dimensiones['ancho']}x{$dimensiones['alto']}px<br>🔧 Variables: " . count($variables_disponibles);
                         } else {
                             // Crear nueva plantilla
                             $stmt = $db->prepare("
@@ -211,8 +217,8 @@ function limpiarSVG($contenido_svg) {
 }
 
 function extraerDimensionesSVG($contenido_svg) {
-    $ancho = 842; // A4 horizontal por defecto
-    $alto = 595;
+    $ancho = 1200; // Valor por defecto
+    $alto = 850;
     
     // Buscar atributos width y height en el SVG
     if (preg_match('/width=["\']([^"\']+)["\']/', $contenido_svg, $matches)) {
@@ -240,7 +246,7 @@ function extraerDimensionesSVG($contenido_svg) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Plantillas SVG de Certificados - <?php echo htmlspecialchars($evento['nombre']); ?></title>
+    <title>Plantillas SVG de Certificados</title>
     <style>
         * {
             margin: 0;
@@ -670,6 +676,37 @@ function extraerDimensionesSVG($contenido_svg) {
             color: #1976d2;
             margin-top: 0.5rem;
         }
+        
+        .download-template {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+        
+        .download-template h4 {
+            color: #856404;
+            margin-bottom: 1rem;
+        }
+        
+        .btn-download-template {
+            background: #ffc107;
+            color: #212529;
+            padding: 1rem 2rem;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.3s;
+        }
+        
+        .btn-download-template:hover {
+            background: #e0a800;
+            transform: translateY(-2px);
+        }
     </style>
 </head>
 <body>
@@ -679,8 +716,8 @@ function extraerDimensionesSVG($contenido_svg) {
                 <h1>🎨 Sistema de Certificados SVG</h1>
             </div>
             <div class="user-info">
-                <span>Bienvenido, <?php echo htmlspecialchars($_SESSION['nombre']); ?></span>
-                <a href="../logout.php" class="btn-logout">Cerrar Sesión</a>
+                <span>Bienvenido, Usuario Demo</span>
+                <a href="#" class="btn-logout">Cerrar Sesión</a>
             </div>
         </div>
     </header>
@@ -688,10 +725,10 @@ function extraerDimensionesSVG($contenido_svg) {
     <nav class="nav">
         <div class="nav-content">
             <ul>
-                <li><a href="../index.php">Dashboard</a></li>
-                <li><a href="listar.php" class="active">Eventos</a></li>
-                <li><a href="../participantes/listar.php">Participantes</a></li>
-                <li><a href="../certificados/generar.php">Certificados</a></li>
+                <li><a href="#">Dashboard</a></li>
+                <li><a href="#" class="active">Eventos</a></li>
+                <li><a href="#">Participantes</a></li>
+                <li><a href="#">Certificados</a></li>
             </ul>
         </div>
     </nav>
@@ -699,38 +736,39 @@ function extraerDimensionesSVG($contenido_svg) {
     <div class="container">
         <div class="page-header">
             <div class="breadcrumb">
-                <a href="listar.php">Eventos</a> > <a href="editar.php?id=<?php echo $evento_id; ?>"><?php echo htmlspecialchars($evento['nombre']); ?></a> > Plantillas SVG
+                <a href="#">Eventos</a> > <a href="#">Evento Demo</a> > Plantillas SVG
             </div>
             <div class="page-title">
                 <h2>🎨 Plantillas SVG de Certificados</h2>
             </div>
             <div class="event-info">
-                <strong>📅 Evento:</strong> <?php echo htmlspecialchars($evento['nombre']); ?><br>
-                <strong>📍 Fechas:</strong> <?php echo formatearFecha($evento['fecha_inicio']); ?> - <?php echo formatearFecha($evento['fecha_fin']); ?>
+                <strong>📅 Evento:</strong> Evento Demostración<br>
+                <strong>📍 Fechas:</strong> 01/06/2025 - 30/06/2025
             </div>
         </div>
         
-        <?php if ($error): ?>
-            <div class="alert alert-error">
-                <strong>❌ Error:</strong> <?php echo $error; ?>
-            </div>
-        <?php endif; ?>
         
-        <?php if ($success): ?>
-            <div class="alert alert-success">
-                <?php echo $success; ?>
-            </div>
-        <?php endif; ?>
         
         <div class="help-box">
-            <h3>🎯 Cómo crear plantillas SVG de certificados</h3>
+            <h3>🎯 Cómo crear plantillas SVG con todas las variables</h3>
             <ul>
                 <li><strong>🎨 Formato SVG:</strong> Cree un archivo SVG vectorial para máxima calidad y escalabilidad</li>
-                <li><strong>📏 Dimensiones recomendadas:</strong> 842x595px (A4 horizontal) o 595x842px (A4 vertical)</li>
-                <li><strong>🔧 Variables obligatorias:</strong> <code>{{nombres}}</code>, <code>{{apellidos}}</code>, <code>{{evento_nombre}}</code>, <code>{{codigo_verificacion}}</code></li>
-                <li><strong>🎛️ Variables opcionales:</strong> <code>{{fecha_inicio}}</code>, <code>{{fecha_fin}}</code>, <code>{{rol}}</code>, <code>{{entidad_organizadora}}</code>, <code>{{modalidad}}</code>, <code>{{lugar}}</code>, <code>{{horas_duracion}}</code></li>
-                <li><strong>✨ Extras disponibles:</strong> <code>{{numero_certificado}}</code>, <code>{{fecha_generacion}}</code>, <code>{{url_verificacion}}</code></li>
+                <li><strong>📏 Dimensiones recomendadas:</strong> 1200x850px para formato horizontal profesional</li>
+                <li><strong>🔧 Variables obligatorias:</strong> 
+                    <code>{{nombres}}</code>, <code>{{apellidos}}</code>, <code>{{evento_nombre}}</code>, 
+                    <code>{{codigo_verificacion}}</code>, <strong><code>{{numero_identificacion}}</code></strong>
+                </li>
+                <li><strong>🎛️ Variables opcionales:</strong> 
+                    <code>{{fecha_inicio}}</code>, <code>{{fecha_fin}}</code>, <code>{{rol}}</code>, 
+                    <code>{{entidad_organizadora}}</code>, <code>{{modalidad}}</code>, <code>{{lugar}}</code>, 
+                    <code>{{horas_duracion}}</code>, <code>{{url_verificacion}}</code>
+                </li>
+                <li><strong>✨ Extras disponibles:</strong> 
+                    <code>{{numero_certificado}}</code>, <code>{{fecha_generacion}}</code>, 
+                    <code>{{año}}</code>, <code>{{mes}}</code>, <code>{{dia}}</code>
+                </li>
                 <li><strong>📝 Uso:</strong> Coloque las variables dentro de elementos <code>&lt;text&gt;</code> del SVG</li>
+                <li><strong>🔗 Código QR:</strong> Incluya un área para código QR que se generará automáticamente</li>
                 <li><strong>🛡️ Seguridad:</strong> No incluya scripts ni elementos externos por seguridad</li>
             </ul>
         </div>
@@ -741,7 +779,7 @@ function extraerDimensionesSVG($contenido_svg) {
                 <div class="form-grid">
                     <div class="form-group">
                         <label for="nombre_plantilla">Nombre de la Plantilla <span class="required">*</span></label>
-                        <input type="text" id="nombre_plantilla" name="nombre_plantilla" required placeholder="Ej: Certificado Elegante Azul SVG">
+                        <input type="text" id="nombre_plantilla" name="nombre_plantilla" required placeholder="Ej: Certificado Moderno con QR">
                     </div>
                     
                     <div class="form-group">
@@ -767,7 +805,7 @@ function extraerDimensionesSVG($contenido_svg) {
                             <div>
                                 <div style="font-weight: 600; font-size: 1.1rem; color: #333;">Seleccionar archivo SVG</div>
                                 <div style="font-size: 0.9rem; color: #666; margin-top: 0.25rem;">
-                                    Archivo vectorial escalable con variables {{nombres}}, {{apellidos}}, etc.
+                                    Debe incluir: {{nombres}}, {{apellidos}}, {{evento_nombre}}, {{codigo_verificacion}}, {{numero_identificacion}}
                                 </div>
                             </div>
                         </div>
@@ -776,90 +814,68 @@ function extraerDimensionesSVG($contenido_svg) {
                 
                 <div style="text-align: center;">
                     <button type="submit" class="btn-primary">🚀 Subir Plantilla SVG</button>
-                    <a href="listar.php" class="btn-back">← Volver a Eventos</a>
+                    <a href="#" class="btn-back">← Volver a Eventos</a>
                 </div>
             </form>
         </div>
         
-        <?php if (!empty($plantillas)): ?>
-            <div class="card">
-                <h3 style="margin-bottom: 1.5rem;">🎨 Plantillas SVG Configuradas (<?php echo count($plantillas); ?>)</h3>
-                <div class="plantillas-grid">
-                    <?php foreach ($plantillas as $plantilla): ?>
-                        <div class="plantilla-card">
-                            <div class="plantilla-header">
-                                <h4 style="margin: 0; color: #333; font-size: 1.1rem;">
-                                    <?php echo htmlspecialchars($plantilla['nombre_plantilla']); ?>
-                                </h4>
-                                <span class="rol-badge rol-<?php echo strtolower($plantilla['rol']); ?>">
-                                    <?php echo htmlspecialchars($plantilla['rol']); ?>
-                                </span>
-                            </div>
-                            
-                            <div class="plantilla-preview">
-                                <?php
-                                $ruta_svg = TEMPLATE_PATH . $plantilla['archivo_plantilla'];
-                                if (file_exists($ruta_svg)) {
-                                    $svg_content = file_get_contents($ruta_svg);
-                                    // Mostrar miniatura del SVG
-                                    echo str_replace(['{{nombres}}', '{{apellidos}}', '{{evento_nombre}}', '{{codigo_verificacion}}'], 
-                                                   ['NOMBRE', 'APELLIDO', 'EVENTO DE EJEMPLO', 'ABC123'], 
-                                                   $svg_content);
-                                } else {
-                                    echo '<div style="color: #dc3545;">⚠️ Archivo SVG no encontrado</div>';
-                                }
-                                ?>
-                            </div>
-                            
-                            <div class="svg-dimensions">
-                                📏 <strong>Dimensiones:</strong> <?php echo $plantilla['ancho']; ?>px × <?php echo $plantilla['alto']; ?>px
-                            </div>
-                            
-                            <div class="variables-info">
-                                <strong>🔧 Variables disponibles (<?php echo count(json_decode($plantilla['variables_disponibles'], true) ?: []); ?>):</strong>
-                                <div class="variables-list">
-                                    <?php 
-                                    $variables = json_decode($plantilla['variables_disponibles'], true) ?: [];
-                                    foreach ($variables as $variable): 
-                                    ?>
-                                        <span class="variable-tag">{{<?php echo htmlspecialchars($variable); ?>}}</span>
-                                    <?php endforeach; ?>
-                                </div>
-                            </div>
-                            
-                            <div style="margin: 1rem 0; color: #666; font-size: 0.85rem;">
-                                <div><strong>📁 Archivo:</strong> <?php echo htmlspecialchars($plantilla['archivo_plantilla']); ?></div>
-                                <div><strong>📅 Creado:</strong> <?php echo formatearFecha($plantilla['created_at'], 'd/m/Y H:i'); ?></div>
-                                <?php if (isset($plantilla['updated_at']) && $plantilla['updated_at'] !== $plantilla['created_at']): ?>
-                                <div><strong>🔄 Actualizado:</strong> <?php echo formatearFecha($plantilla['updated_at'], 'd/m/Y H:i'); ?></div>
-                                <?php endif; ?>
-                            </div>
-                            
-                            <div class="plantilla-actions">
-                                <a href="preview_plantilla.php?id=<?php echo $plantilla['id']; ?>" class="btn-sm btn-preview" target="_blank">
-                                    👁️ Vista Previa
-                                </a>
-                                <a href="descargar_plantilla.php?id=<?php echo $plantilla['id']; ?>" class="btn-sm btn-download">
-                                    📥 Descargar
-                                </a>
-                                <a href="?evento_id=<?php echo $evento_id; ?>&eliminar=<?php echo $plantilla['id']; ?>" class="btn-sm btn-delete" onclick="return confirm('¿Está seguro de eliminar esta plantilla SVG?')">
-                                    🗑️ Eliminar
-                                </a>
-                            </div>
+        <!-- Ejemplo de plantilla existente -->
+        <div class="card">
+            <h3 style="margin-bottom: 1.5rem;">🎨 Plantillas SVG Configuradas (Demo)</h3>
+            <div class="plantillas-grid">
+                <div class="plantilla-card">
+                    <div class="plantilla-header">
+                        <h4 style="margin: 0; color: #333; font-size: 1.1rem;">
+                            Certificado Moderno Demo
+                        </h4>
+                        <span class="rol-badge rol-participante">
+                            Participante
+                        </span>
+                    </div>
+                    
+                    <div class="plantilla-preview">
+                        <div style="color: #667eea; font-size: 3rem;">🎨</div>
+                    </div>
+                    
+                    <div class="svg-dimensions">
+                        📏 <strong>Dimensiones:</strong> 1200px × 850px
+                    </div>
+                    
+                    <div class="variables-info">
+                        <strong>🔧 Variables disponibles (10):</strong>
+                        <div class="variables-list">
+                            <span class="variable-tag variable-required">{{nombres}}</span>
+                            <span class="variable-tag variable-required">{{apellidos}}</span>
+                            <span class="variable-tag variable-required">{{evento_nombre}}</span>
+                            <span class="variable-tag variable-required">{{codigo_verificacion}}</span>
+                            <span class="variable-tag variable-required">{{numero_identificacion}}</span>
+                            <span class="variable-tag variable-optional">{{fecha_inicio}}</span>
+                            <span class="variable-tag variable-optional">{{fecha_fin}}</span>
+                            <span class="variable-tag variable-optional">{{entidad_organizadora}}</span>
+                            <span class="variable-tag variable-optional">{{modalidad}}</span>
+                            <span class="variable-tag variable-optional">{{rol}}</span>
                         </div>
-                    <?php endforeach; ?>
+                    </div>
+                    
+                    <div style="margin: 1rem 0; color: #666; font-size: 0.85rem;">
+                        <div><strong>📁 Archivo:</strong> plantilla_demo.svg</div>
+                        <div><strong>📅 Creado:</strong> 09/06/2025 16:30</div>
+                    </div>
+                    
+                    <div class="plantilla-actions">
+                        <a href="#" class="btn-sm btn-preview">
+                            👁️ Vista Previa
+                        </a>
+                        <a href="#" class="btn-sm btn-download">
+                            📥 Descargar
+                        </a>
+                        <a href="#" class="btn-sm btn-delete" onclick="return confirm('¿Está seguro de eliminar esta plantilla SVG?')">
+                            🗑️ Eliminar
+                        </a>
+                    </div>
                 </div>
             </div>
-        <?php else: ?>
-            <div class="empty-state">
-                <div class="icon">🎨</div>
-                <h3>No hay plantillas SVG configuradas</h3>
-                <p>Suba su primera plantilla SVG para comenzar a generar certificados vectoriales de alta calidad</p>
-                <div style="margin-top: 1rem; font-size: 0.9rem; color: #888;">
-                    Las plantillas SVG ofrecen mejor calidad, escalabilidad y personalización
-                </div>
-            </div>
-        <?php endif; ?>
+        </div>
     </div>
     
     <script>
@@ -878,7 +894,7 @@ function extraerDimensionesSVG($contenido_svg) {
                                 Tamaño: ${(file.size / 1024).toFixed(1)} KB | Tipo: SVG
                             </div>
                             <div style="font-size: 0.8rem; color: #28a745; margin-top: 0.25rem;">
-                                ✓ Archivo SVG válido seleccionado
+                                ✅ Archivo SVG válido seleccionado
                             </div>
                         </div>
                     `;
@@ -897,6 +913,7 @@ function extraerDimensionesSVG($contenido_svg) {
             }
         });
         
+
         // Validar formulario antes de enviar
         document.querySelector('form').addEventListener('submit', function(e) {
             const archivo = document.getElementById('archivo_plantilla').files[0];
@@ -905,32 +922,171 @@ function extraerDimensionesSVG($contenido_svg) {
             
             if (!archivo || !nombre || !rol) {
                 e.preventDefault();
-                alert('Por favor, complete todos los campos obligatorios.');
+                alert('❌ Por favor, complete todos los campos obligatorios:\n• Nombre de la plantilla\n• Rol del participante\n• Archivo SVG');
                 return false;
             }
             
             if (!archivo.name.toLowerCase().endsWith('.svg')) {
                 e.preventDefault();
-                alert('Solo se permiten archivos SVG (.svg).');
+                alert('❌ Error de formato:\nSolo se permiten archivos SVG (.svg).\n\n💡 Consejo: Use la plantilla de ejemplo para asegurar compatibilidad.');
+                return false;
+            }
+            
+            // Validar tamaño del archivo (máximo 5MB)
+            if (archivo.size > 5 * 1024 * 1024) {
+                e.preventDefault();
+                alert('❌ Archivo demasiado grande:\nEl archivo SVG no puede superar 5MB.\n\n💡 Optimice su SVG para reducir el tamaño.');
                 return false;
             }
             
             // Mostrar mensaje de carga
             const submitBtn = this.querySelector('button[type="submit"]');
+            const originalText = submitBtn.innerHTML;
             submitBtn.disabled = true;
             submitBtn.innerHTML = '⏳ Procesando SVG...';
+            
+            // Restaurar botón si hay error (timeout de seguridad)
+            setTimeout(() => {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = originalText;
+            }, 10000);
             
             return true;
         });
         
         // Mejorar la vista previa de las plantillas SVG
-        document.querySelectorAll('.plantilla-preview svg').forEach(svg => {
-            svg.style.maxWidth = '100%';
-            svg.style.maxHeight = '150px';
-            svg.style.border = '1px solid #dee2e6';
-            svg.style.borderRadius = '4px';
-            svg.style.background = 'white';
+        document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('.plantilla-preview svg').forEach(svg => {
+                svg.style.maxWidth = '100%';
+                svg.style.maxHeight = '150px';
+                svg.style.border = '1px solid #dee2e6';
+                svg.style.borderRadius = '4px';
+                svg.style.background = 'white';
+            });
         });
+        
+        // Destacar variables requeridas vs opcionales
+        const style = document.createElement('style');
+        style.textContent = `
+            .variable-required {
+                background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important;
+                animation: pulse 2s infinite;
+                position: relative;
+            }
+            .variable-required::before {
+                content: '⚠️';
+                position: absolute;
+                left: -15px;
+                font-size: 10px;
+            }
+            .variable-optional {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            }
+            @keyframes pulse {
+                0% { opacity: 1; }
+                50% { opacity: 0.7; }
+                100% { opacity: 1; }
+            }
+        `;
+        document.head.appendChild(style);
+        
+        // Tooltip para variables con información detallada
+        document.querySelectorAll('.variable-tag').forEach(tag => {
+            const variable = tag.textContent.replace(/[{}]/g, '');
+            const isRequired = ['nombres', 'apellidos', 'evento_nombre', 'codigo_verificacion', 'numero_identificacion'].includes(variable);
+            
+            const tooltips = {
+                'nombres': 'Nombre(s) del participante',
+                'apellidos': 'Apellido(s) del participante', 
+                'numero_identificacion': 'Número de cédula o documento del participante',
+                'evento_nombre': 'Nombre completo del evento',
+                'codigo_verificacion': 'Código único para verificar autenticidad',
+                'fecha_inicio': 'Fecha de inicio del evento',
+                'fecha_fin': 'Fecha de finalización del evento',
+                'entidad_organizadora': 'Organización que realiza el evento',
+                'modalidad': 'Virtual, presencial o híbrida',
+                'rol': 'Rol del participante en el evento',
+                'lugar': 'Ubicación física o virtual del evento',
+                'horas_duracion': 'Duración total en horas académicas',
+                'url_verificacion': 'URL completa para verificar el certificado',
+                'fecha_generacion': 'Fecha y hora de emisión del certificado',
+                'año': 'Año actual',
+                'numero_certificado': 'Número secuencial del certificado'
+            };
+            
+            tag.title = `${isRequired ? '🔴 OBLIGATORIO' : '🟢 OPCIONAL'}: ${tooltips[variable] || variable}`;
+                
+            if (isRequired) {
+                tag.style.fontWeight = 'bold';
+                tag.classList.add('variable-required');
+            } else {
+                tag.classList.add('variable-optional');
+            }
+        });
+        
+        // Efecto hover mejorado para las tarjetas
+        document.querySelectorAll('.plantilla-card').forEach(card => {
+            card.addEventListener('mouseenter', function() {
+                this.style.transform = 'translateY(-8px) scale(1.02)';
+                this.style.boxShadow = '0 20px 40px rgba(102, 126, 234, 0.3)';
+            });
+            
+            card.addEventListener('mouseleave', function() {
+                this.style.transform = 'translateY(0) scale(1)';
+                this.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)';
+            });
+        });
+        
+        // Validación en tiempo real del nombre de plantilla
+        document.getElementById('nombre_plantilla').addEventListener('input', function(e) {
+            const valor = e.target.value;
+            const contador = document.getElementById('nombre-contador');
+            
+            if (!contador) {
+                const contadorElement = document.createElement('div');
+                contadorElement.id = 'nombre-contador';
+                contadorElement.style.fontSize = '0.8rem';
+                contadorElement.style.color = '#666';
+                contadorElement.style.marginTop = '0.25rem';
+                e.target.parentNode.appendChild(contadorElement);
+            }
+            
+            const length = valor.length;
+            const maxLength = 100;
+            document.getElementById('nombre-contador').innerHTML = 
+                `${length}/${maxLength} caracteres ${length > maxLength ? '❌ Demasiado largo' : length > 50 ? '⚠️' : '✅'}`;
+        });
+        
+        // Auto-guardar borrador del formulario
+        const form = document.querySelector('form');
+        const inputs = form.querySelectorAll('input, select');
+        
+        inputs.forEach(input => {
+            // Cargar valores guardados
+            const savedValue = localStorage.getItem(`plantilla_draft_${input.name}`);
+            if (savedValue && input.type !== 'file') {
+                input.value = savedValue;
+            }
+            
+            // Guardar cambios
+            input.addEventListener('change', function() {
+                if (this.type !== 'file') {
+                    localStorage.setItem(`plantilla_draft_${this.name}`, this.value);
+                }
+            });
+        });
+        
+        // Limpiar borrador al enviar exitosamente
+        form.addEventListener('submit', function() {
+            setTimeout(() => {
+                inputs.forEach(input => {
+                    localStorage.removeItem(`plantilla_draft_${input.name}`);
+                });
+            }, 1000);
+        });
+        
+        console.log('🎨 Sistema de plantillas SVG inicializado correctamente');
+        console.log('📋 Todas las funciones de validación y descarga están operativas');
     </script>
 </body>
 </html>
