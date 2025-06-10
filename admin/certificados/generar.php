@@ -2,6 +2,7 @@
 // admin/certificados/generar.php - VERSIÓN COMPLETA MEJORADA
 require_once '../../config/config.php';
 require_once '../../includes/funciones.php';
+require_once '../../includes/funciones_svg.php';
 
 verificarAutenticacion();
 
@@ -406,7 +407,7 @@ function obtenerPlantillaDisponible($evento_id, $rol) {
     }
 }
 
-function generarCertificadoConPlantillaSVG($participante, $codigo_verificacion, $plantilla) {
+function generarCertificadoConPlantillaSVGMejorado($participante, $codigo_verificacion, $plantilla) {
     try {
         // Leer plantilla SVG
         $ruta_plantilla = TEMPLATE_PATH . $plantilla['archivo_plantilla'];
@@ -419,19 +420,16 @@ function generarCertificadoConPlantillaSVG($participante, $codigo_verificacion, 
             throw new Exception("La plantilla SVG está vacía");
         }
         
-        // Preparar datos para reemplazar variables (COMPLETO)
+        // Optimizar SVG para mejor renderizado
+        $contenido_svg = optimizarSVGTexto($contenido_svg);
+        
+        // Preparar datos para reemplazar variables
         $datos_certificado = [
-            // Datos básicos del participante
-            '{{nombres}}' => htmlspecialchars($participante['nombres'], ENT_XML1, 'UTF-8'),
-            '{{apellidos}}' => htmlspecialchars($participante['apellidos'], ENT_XML1, 'UTF-8'),
             '{{numero_identificacion}}' => htmlspecialchars($participante['numero_identificacion'], ENT_XML1, 'UTF-8'),
             '{{correo_electronico}}' => htmlspecialchars($participante['correo_electronico'], ENT_XML1, 'UTF-8'),
             '{{rol}}' => htmlspecialchars($participante['rol'], ENT_XML1, 'UTF-8'),
             '{{telefono}}' => htmlspecialchars($participante['telefono'] ?: '', ENT_XML1, 'UTF-8'),
             '{{institucion}}' => htmlspecialchars($participante['institucion'] ?: '', ENT_XML1, 'UTF-8'),
-            
-            // Datos del evento
-            '{{evento_nombre}}' => htmlspecialchars($participante['evento_nombre'], ENT_XML1, 'UTF-8'),
             '{{evento_descripcion}}' => htmlspecialchars($participante['descripcion'] ?: '', ENT_XML1, 'UTF-8'),
             '{{fecha_inicio}}' => formatearFecha($participante['fecha_inicio']),
             '{{fecha_fin}}' => formatearFecha($participante['fecha_fin']),
@@ -439,8 +437,6 @@ function generarCertificadoConPlantillaSVG($participante, $codigo_verificacion, 
             '{{modalidad}}' => ucfirst($participante['modalidad']),
             '{{lugar}}' => htmlspecialchars($participante['lugar'] ?: 'Virtual', ENT_XML1, 'UTF-8'),
             '{{horas_duracion}}' => $participante['horas_duracion'] ?: '0',
-            
-            // Datos del certificado
             '{{codigo_verificacion}}' => $codigo_verificacion,
             '{{fecha_generacion}}' => date('d/m/Y H:i'),
             '{{fecha_emision}}' => date('d/m/Y'),
@@ -450,8 +446,6 @@ function generarCertificadoConPlantillaSVG($participante, $codigo_verificacion, 
             '{{url_verificacion}}' => PUBLIC_URL . 'verificar.php?codigo=' . $codigo_verificacion,
             '{{numero_certificado}}' => 'CERT-' . date('Y') . '-' . str_pad($participante['id'], 6, '0', STR_PAD_LEFT),
             '{{firma_digital}}' => 'Certificado Digital Verificado',
-            
-            // Variables adicionales útiles
             '{{mes_nombre}}' => obtenerNombreMes(date('n')),
             '{{año_completo}}' => date('Y'),
             '{{duracion_texto}}' => $participante['horas_duracion'] ? $participante['horas_duracion'] . ' horas académicas' : 'Duración no especificada',
@@ -460,14 +454,26 @@ function generarCertificadoConPlantillaSVG($participante, $codigo_verificacion, 
             '{{iniciales}}' => obtenerIniciales($participante['nombres'], $participante['apellidos']),
         ];
         
-        // Reemplazar variables en el SVG
-        $svg_procesado = $contenido_svg;
+        // PROCESAR TEXTOS LARGOS CON NUEVA LÓGICA
+        
+        // 1. Procesar nombres largos (manejo especial)
+        $contenido_svg = procesarNombresLargos($contenido_svg, $participante['nombres'], $participante['apellidos']);
+        
+        // 2. Procesar evento largo (manejo especial)
+        $contenido_svg = procesarEventosLargos($contenido_svg, $participante['evento_nombre']);
+        
+        // 3. Reemplazar el resto de variables normalmente
         foreach ($datos_certificado as $variable => $valor) {
-            $svg_procesado = str_replace($variable, $valor, $svg_procesado);
+            $contenido_svg = str_replace($variable, $valor, $contenido_svg);
         }
         
-        // Limpiar cualquier variable no reemplazada (opcional)
-        $svg_procesado = preg_replace('/\{\{[^}]+\}\}/', '', $svg_procesado);
+        // 4. Limpiar variables no reemplazadas
+        $contenido_svg = preg_replace('/\{\{[^}]+\}\}/', '', $contenido_svg);
+        
+        // 5. Validar que el SVG resultante sea válido
+        if (strpos($contenido_svg, '<svg') === false) {
+            throw new Exception("El SVG procesado no es válido");
+        }
         
         // Generar nombre de archivo único
         $nombre_archivo = $codigo_verificacion . '_' . time() . '.svg';
@@ -479,7 +485,108 @@ function generarCertificadoConPlantillaSVG($participante, $codigo_verificacion, 
         }
         
         // Guardar SVG procesado
-        if (file_put_contents($ruta_completa, $svg_procesado) === false) {
+        if (file_put_contents($ruta_completa, $contenido_svg) === false) {
+            throw new Exception("No se pudo escribir el archivo SVG");
+        }
+        
+        return [
+            'success' => true,
+            'nombre_archivo' => $nombre_archivo,
+            'ruta_completa' => $ruta_completa,
+            'tamaño' => filesize($ruta_completa),
+            'tipo' => 'svg',
+            'dimensiones' => [
+                'ancho' => $plantilla['ancho'],
+                'alto' => $plantilla['alto']
+            ]
+        ];
+        
+    } catch (Exception $e) {
+        error_log("Error generando SVG mejorado: " . $e->getMessage());
+        return [
+            'success' => false,
+            'error' => $e->getMessage()
+        ];
+    }
+}
+
+function generarCertificadoConPlantillaSVG($participante, $codigo_verificacion, $plantilla) {
+    try {
+        // Incluir funciones SVG mejoradas
+        if (!function_exists('procesarNombresLargos')) {
+            require_once __DIR__ . '/../../includes/funciones_svg.php';
+        }
+        
+        // Leer plantilla SVG
+        $ruta_plantilla = TEMPLATE_PATH . $plantilla['archivo_plantilla'];
+        if (!file_exists($ruta_plantilla)) {
+            throw new Exception("Archivo de plantilla SVG no encontrado: " . $plantilla['archivo_plantilla']);
+        }
+        
+        $contenido_svg = file_get_contents($ruta_plantilla);
+        if (empty($contenido_svg)) {
+            throw new Exception("La plantilla SVG está vacía");
+        }
+        
+        // Optimizar SVG para mejor renderizado
+        $contenido_svg = optimizarSVGTexto($contenido_svg);
+        
+        // PROCESAR NOMBRES LARGOS PRIMERO (MANEJO ESPECIAL)
+        $contenido_svg = procesarNombresLargos($contenido_svg, $participante['nombres'], $participante['apellidos']);
+        
+        // PROCESAR EVENTO LARGO (MANEJO ESPECIAL)  
+        $contenido_svg = procesarEventosLargos($contenido_svg, $participante['evento_nombre']);
+        
+        // Preparar datos para variables restantes
+        $datos_certificado = [
+            '{{numero_identificacion}}' => htmlspecialchars($participante['numero_identificacion'], ENT_XML1, 'UTF-8'),
+            '{{correo_electronico}}' => htmlspecialchars($participante['correo_electronico'], ENT_XML1, 'UTF-8'),
+            '{{rol}}' => htmlspecialchars($participante['rol'], ENT_XML1, 'UTF-8'),
+            '{{telefono}}' => htmlspecialchars($participante['telefono'] ?: '', ENT_XML1, 'UTF-8'),
+            '{{institucion}}' => htmlspecialchars($participante['institucion'] ?: '', ENT_XML1, 'UTF-8'),
+            '{{evento_descripcion}}' => htmlspecialchars($participante['descripcion'] ?: '', ENT_XML1, 'UTF-8'),
+            '{{fecha_inicio}}' => formatearFecha($participante['fecha_inicio']),
+            '{{fecha_fin}}' => formatearFecha($participante['fecha_fin']),
+            '{{entidad_organizadora}}' => htmlspecialchars($participante['entidad_organizadora'], ENT_XML1, 'UTF-8'),
+            '{{modalidad}}' => ucfirst($participante['modalidad']),
+            '{{lugar}}' => htmlspecialchars($participante['lugar'] ?: 'Virtual', ENT_XML1, 'UTF-8'),
+            '{{horas_duracion}}' => $participante['horas_duracion'] ?: '0',
+            '{{codigo_verificacion}}' => $codigo_verificacion,
+            '{{fecha_generacion}}' => date('d/m/Y H:i'),
+            '{{fecha_emision}}' => date('d/m/Y'),
+            '{{año}}' => date('Y'),
+            '{{mes}}' => date('m'),
+            '{{dia}}' => date('d'),
+            '{{url_verificacion}}' => PUBLIC_URL . 'verificar.php?codigo=' . $codigo_verificacion,
+            '{{numero_certificado}}' => 'CERT-' . date('Y') . '-' . str_pad($participante['id'], 6, '0', STR_PAD_LEFT),
+            '{{firma_digital}}' => 'Certificado Digital Verificado',
+            '{{mes_nombre}}' => obtenerNombreMes(date('n')),
+            '{{año_completo}}' => date('Y'),
+            '{{duracion_texto}}' => $participante['horas_duracion'] ? $participante['horas_duracion'] . ' horas académicas' : 'Duración no especificada',
+            '{{modalidad_completa}}' => obtenerModalidadCompleta($participante['modalidad']),
+            '{{nombre_completo}}' => htmlspecialchars($participante['nombres'] . ' ' . $participante['apellidos'], ENT_XML1, 'UTF-8'),
+            '{{iniciales}}' => obtenerIniciales($participante['nombres'], $participante['apellidos']),
+        ];
+        
+        // Reemplazar variables restantes
+        foreach ($datos_certificado as $variable => $valor) {
+            $contenido_svg = str_replace($variable, $valor, $contenido_svg);
+        }
+        
+        // Limpiar cualquier variable no reemplazada
+        $contenido_svg = preg_replace('/\{\{[^}]+\}\}/', '', $contenido_svg);
+        
+        // Generar nombre de archivo único
+        $nombre_archivo = $codigo_verificacion . '_' . time() . '.svg';
+        $ruta_completa = GENERATED_PATH . 'certificados/' . $nombre_archivo;
+        
+        // Asegurar que el directorio existe
+        if (!is_dir(GENERATED_PATH . 'certificados/')) {
+            mkdir(GENERATED_PATH . 'certificados/', 0755, true);
+        }
+        
+        // Guardar SVG procesado
+        if (file_put_contents($ruta_completa, $contenido_svg) === false) {
             throw new Exception("No se pudo escribir el archivo SVG");
         }
         

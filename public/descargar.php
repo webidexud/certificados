@@ -40,8 +40,12 @@ if (!isset($_GET['codigo'])) {
             $tipo_archivo = $certificado['tipo_archivo'] ?: 'pdf';
             $ruta_archivo = GENERATED_PATH . 'certificados/' . $certificado['archivo_pdf'];
             
+            // Debug: verificar información del archivo
+            error_log("Descarga - Tipo: {$tipo_archivo}, Archivo: {$certificado['archivo_pdf']}, Ruta: {$ruta_archivo}");
+            
             if (!file_exists($ruta_archivo)) {
                 $error = 'El archivo del certificado no existe en el servidor';
+                error_log("Archivo no encontrado: {$ruta_archivo}");
             } else {
                 // Actualizar contador de descargas
                 $stmt = $db->prepare("
