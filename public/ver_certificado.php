@@ -1,5 +1,5 @@
 <?php
-// public/ver_certificado.php - Visualizador de certificados en PDF
+// public/ver_certificado.php - Optimizado para impresión sin márgenes
 require_once '../config/config.php';
 require_once '../includes/funciones.php';
 
@@ -50,12 +50,11 @@ if (!isset($_GET['codigo'])) {
                     'ip_visualizacion' => $_SERVER['REMOTE_ADDR'] ?? 'Desconocida'
                 ]);
                 
-                // Si es SVG, convertir a visualización PDF o mostrar directamente
-                if ($tipo_archivo === 'svg') {
-                    // Leer el contenido SVG
-                    $contenido_svg = file_get_contents($ruta_archivo);
+                // Si es SVG o HTML, mostrar con estilos optimizados para impresión
+                if ($tipo_archivo === 'svg' || $tipo_archivo === 'html') {
+                    $contenido = file_get_contents($ruta_archivo);
                     
-                    // Mostrar SVG en una página HTML responsive
+                    // Mostrar contenido optimizado para impresión
                     ?>
                     <!DOCTYPE html>
                     <html lang="es">
@@ -64,72 +63,110 @@ if (!isset($_GET['codigo'])) {
                         <meta name="viewport" content="width=device-width, initial-scale=1.0">
                         <title>Certificado - <?php echo htmlspecialchars($certificado['nombres'] . ' ' . $certificado['apellidos']); ?></title>
                         <style>
-                            body {
-                                margin: 0;
-                                padding: 20px;
-                                background: #f5f5f5;
+                            @page {
+                                size: A4 landscape;
+                                margin: 0mm !important;
+                                padding: 0mm !important;
+                            }
+                            
+                            * {
+                                margin: 0 !important;
+                                padding: 0 !important;
+                                box-sizing: border-box;
+                            }
+                            
+                            html, body {
+                                margin: 0 !important;
+                                padding: 0 !important;
+                                background: white !important;
                                 font-family: Arial, sans-serif;
+                                width: 100% !important;
+                                height: 100% !important;
+                                overflow: hidden;
+                            }
+                            
+                            .certificate-container {
+                                width: 100% !important;
+                                height: 100vh !important;
                                 display: flex;
                                 justify-content: center;
                                 align-items: center;
-                                min-height: 100vh;
+                                background: white !important;
+                                margin: 0 !important;
+                                padding: 0 !important;
                             }
-                            .certificate-container {
-                                background: white;
-                                padding: 20px;
-                                border-radius: 8px;
-                                box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-                                max-width: 100%;
-                                text-align: center;
+                            
+                            .certificate-display {
+                                width: 100% !important;
+                                height: 100% !important;
+                                margin: 0 !important;
+                                padding: 0 !important;
+                                border: none !important;
+                                box-shadow: none !important;
+                                background: white !important;
                             }
-                            .certificate-svg {
-                                max-width: 100%;
-                                height: auto;
-                                border: 1px solid #ddd;
-                                border-radius: 4px;
+                            
+                            .certificate-display svg {
+                                width: 100% !important;
+                                height: 100% !important;
+                                margin: 0 !important;
+                                padding: 0 !important;
+                                display: block;
                             }
-                            .certificate-info {
-                                margin-top: 15px;
-                                padding: 10px;
-                                background: #e3f2fd;
-                                border-radius: 4px;
-                                font-size: 0.9rem;
-                                color: #1565c0;
+                            
+                            /* Estilos específicos para HTML */
+                            .certificate-display iframe {
+                                width: 100% !important;
+                                height: 100% !important;
+                                border: none !important;
+                                margin: 0 !important;
+                                padding: 0 !important;
                             }
-                            .download-btn {
-                                margin-top: 15px;
-                                display: inline-block;
-                                background: #4CAF50;
-                                color: white;
-                                padding: 10px 20px;
-                                text-decoration: none;
-                                border-radius: 5px;
-                                font-weight: bold;
-                            }
-                            .download-btn:hover {
-                                background: #45a049;
-                            }
+                            
                             @media print {
-                                body { background: white; padding: 0; }
-                                .certificate-container { box-shadow: none; padding: 0; }
-                                .certificate-info, .download-btn { display: none; }
+                                html, body {
+                                    margin: 0mm !important;
+                                    padding: 0mm !important;
+                                    width: 100% !important;
+                                    height: 100% !important;
+                                    background: white !important;
+                                }
+                                
+                                .certificate-container {
+                                    margin: 0mm !important;
+                                    padding: 0mm !important;
+                                    width: 100% !important;
+                                    height: 100% !important;
+                                }
+                                
+                                .certificate-display {
+                                    margin: 0mm !important;
+                                    padding: 0mm !important;
+                                    width: 100% !important;
+                                    height: 100% !important;
+                                }
+                                
+                                .certificate-display svg {
+                                    margin: 0mm !important;
+                                    padding: 0mm !important;
+                                    width: 100% !important;
+                                    height: 100% !important;
+                                }
                             }
                         </style>
                     </head>
                     <body>
                         <div class="certificate-container">
-                            <div class="certificate-svg">
-                                <?php echo $contenido_svg; ?>
+                            <div class="certificate-display">
+                                <?php 
+                                if ($tipo_archivo === 'svg') {
+                                    echo $contenido;
+                                } elseif ($tipo_archivo === 'html') {
+                                    // Para HTML, mostrar el contenido directamente
+                                    echo $contenido;
+                                }
+                                ?>
                             </div>
-                            <div class="certificate-info">
-                                <strong>Certificado para:</strong> <?php echo htmlspecialchars($certificado['nombres'] . ' ' . $certificado['apellidos']); ?><br>
-                                <strong>Evento:</strong> <?php echo htmlspecialchars($certificado['evento_nombre']); ?><br>
-                                <strong>Código:</strong> <?php echo htmlspecialchars($codigo_verificacion); ?>
-                            </div>
-                            <a href="../public/descargar.php?codigo=<?php echo urlencode($codigo_verificacion); ?>" 
-                               class="download-btn" target="_blank">
-                                📥 Descargar Certificado
-                            </a>
                         </div>
                     </body>
                     </html>
@@ -155,7 +192,7 @@ if (!isset($_GET['codigo'])) {
     }
 }
 
-// Si hay error, mostrar página de error
+// Si hay error, mostrar página de error optimizada
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -164,6 +201,11 @@ if (!isset($_GET['codigo'])) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Error - Visualización de Certificado</title>
     <style>
+        @page {
+            size: A4;
+            margin: 0mm;
+        }
+        
         body {
             margin: 0;
             padding: 20px;
@@ -174,6 +216,7 @@ if (!isset($_GET['codigo'])) {
             align-items: center;
             min-height: 100vh;
         }
+        
         .error-container {
             background: white;
             padding: 30px;
@@ -182,22 +225,26 @@ if (!isset($_GET['codigo'])) {
             text-align: center;
             max-width: 500px;
         }
+        
         .error-icon {
             font-size: 3rem;
             color: #dc3545;
             margin-bottom: 20px;
         }
+        
         .error-title {
             color: #dc3545;
             font-size: 1.5rem;
             margin-bottom: 15px;
             font-weight: bold;
         }
+        
         .error-message {
             color: #666;
             margin-bottom: 25px;
             line-height: 1.6;
         }
+        
         .back-btn {
             display: inline-block;
             background: #6c757d;
@@ -207,6 +254,7 @@ if (!isset($_GET['codigo'])) {
             border-radius: 5px;
             font-weight: bold;
         }
+        
         .back-btn:hover {
             background: #5a6268;
         }

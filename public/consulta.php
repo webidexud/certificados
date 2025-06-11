@@ -1,5 +1,5 @@
 <?php
-// public/consulta.php
+// public/consulta.php - VERSIÓN MODIFICADA CON FUNCIONALIDAD DE IMPRESIÓN
 require_once '../config/config.php';
 require_once '../includes/funciones.php';
 
@@ -24,6 +24,7 @@ if ($_POST) {
                     c.fecha_generacion,
                     c.archivo_pdf,
                     c.estado,
+                    c.tipo_archivo,
                     p.nombres,
                     p.apellidos,
                     p.rol,
@@ -264,6 +265,9 @@ if ($_POST) {
             display: inline-flex;
             align-items: center;
             gap: 0.5rem;
+            border: none;
+            cursor: pointer;
+            font-size: 0.9rem;
         }
         
         .btn-primary {
@@ -378,6 +382,30 @@ if ($_POST) {
                 flex-direction: column;
             }
         }
+
+        /* Estilos para impresión */
+        @media print {
+            body { 
+                background: white !important; 
+                color: black !important;
+            }
+            
+            .header, .search-card, .info-banner, .back-home, 
+            .certificate-actions, .no-results { 
+                display: none !important; 
+            }
+            
+            .certificate-card {
+                box-shadow: none !important;
+                border: 1px solid #ddd !important;
+                break-inside: avoid;
+                margin-bottom: 2rem !important;
+            }
+            
+            .certificates-section {
+                margin-top: 0 !important;
+            }
+        }
     </style>
 </head>
 <body>
@@ -479,11 +507,28 @@ if ($_POST) {
                             
                             <div class="certificate-actions">
                                 <?php if ($cert['archivo_pdf']): ?>
-                                    <a href="descargar.php?codigo=<?php echo urlencode($cert['codigo_verificacion']); ?>" class="btn btn-primary">
-                                        📥 Descargar PDF
-                                    </a>
+                                    <?php 
+                                    // Detectar si es SVG o HTML para mostrar opción de impresión
+                                    $es_imprimible = (isset($cert['tipo_archivo']) && in_array($cert['tipo_archivo'], ['svg', 'html'])) || 
+                                                   (strpos($cert['archivo_pdf'], '.svg') !== false) || 
+                                                   (strpos($cert['archivo_pdf'], '.html') !== false);
+                                    ?>
+                                    
+                                    <?php if ($es_imprimible): ?>
+                                        <button onclick="imprimirCertificado('<?php echo urlencode($cert['codigo_verificacion']); ?>')" 
+                                                class="btn btn-primary">
+                                            🖨️ Imprimir Certificado
+                                        </button>
+                                    <?php else: ?>
+                                        <a href="descargar.php?codigo=<?php echo urlencode($cert['codigo_verificacion']); ?>" 
+                                           class="btn btn-primary">
+                                            📥 Descargar PDF
+                                        </a>
+                                    <?php endif; ?>
                                 <?php endif; ?>
-                                <a href="verificar.php?codigo=<?php echo urlencode($cert['codigo_verificacion']); ?>" class="btn btn-secondary">
+                                
+                                <a href="verificar.php?codigo=<?php echo urlencode($cert['codigo_verificacion']); ?>" 
+                                   class="btn btn-secondary">
                                     ✓ Verificar Autenticidad
                                 </a>
                             </div>
@@ -524,6 +569,53 @@ if ($_POST) {
         window.addEventListener('load', function() {
             document.getElementById('numero_identificacion').focus();
         });
+        
+        // FUNCIÓN PARA IMPRIMIR CERTIFICADO (igual que en preview_plantilla.php)
+        function imprimirCertificado(codigoVerificacion) {
+            // Crear URL para obtener el contenido del certificado
+            const urlCertificado = `ver_certificado.php?codigo=${codigoVerificacion}`;
+            
+            // Crear ventana nueva para impresión
+            const ventana = window.open('', '_blank', 'width=1200,height=900');
+            
+            // Crear contenido HTML para impresión
+            ventana.document.write(`
+                <html>
+                <head>
+                    <title>Certificado - ${codigoVerificacion}</title>
+                    <style>
+                        body { 
+                            margin: 0; 
+                            padding: 20px; 
+                            background: white; 
+                            font-family: Arial, sans-serif;
+                        }
+                        .loading {
+                            text-align: center;
+                            padding: 50px;
+                            font-size: 18px;
+                            color: #666;
+                        }
+                        iframe {
+                            width: 100%;
+                            height: 600px;
+                            border: none;
+                        }
+                        @media print {
+                            body { margin: 0; padding: 0; }
+                            .loading { display: none; }
+                            iframe { height: 100vh; }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="loading">Cargando certificado...</div>
+                    <iframe src="${urlCertificado}" onload="this.style.display='block'; document.querySelector('.loading').style.display='none'; setTimeout(() => window.print(), 1000);"></iframe>
+                </body>
+                </html>
+            `);
+            ventana.document.close();
+        }
     </script>
 </body>
 </html>
