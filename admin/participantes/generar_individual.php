@@ -1,5 +1,5 @@
 <?php
-// admin/participantes/generar_individual.php - VERSIÓN CORREGIDA CON PDF REAL
+// admin/participantes/generar_individual.php - VERSIÓN COMPLETA CON PLANTILLAS SVG
 require_once '../../config/config.php';
 require_once '../../includes/funciones.php';
 
@@ -52,13 +52,14 @@ try {
         exit;
     }
     
-    // GENERAR CERTIFICADO CON PDF REAL
-    $resultado = generarCertificadoPDFReal($participante);
+    // GENERAR CERTIFICADO CON PLANTILLA SVG
+    $resultado = generarCertificadoConPlantilla($participante);
     
     if ($resultado['success']) {
         $_SESSION['success_mensaje'] = 'Certificado generado exitosamente para ' . 
                                       $participante['nombres'] . ' ' . $participante['apellidos'] . 
-                                      '. Código: ' . $resultado['codigo_verificacion'];
+                                      '. Código: ' . $resultado['codigo_verificacion'] .
+                                      ' (Tipo: ' . strtoupper($resultado['tipo']) . ')';
     } else {
         $_SESSION['error_mensaje'] = 'Error al generar certificado: ' . $resultado['error'];
     }
@@ -71,21 +72,45 @@ try {
 header('Location: listar.php');
 exit;
 
-function generarCertificadoPDFReal($participante) {
+function generarCertificadoConPlantilla($participante) {
     try {
         $db = Database::getInstance()->getConnection();
         
         // Generar código único
         $codigo_verificacion = generarCodigoUnico();
         
-        // Generar contenido HTML del certificado
-        $html_certificado = generarHTMLCertificado($participante, $codigo_verificacion);
+        // Buscar plantilla SVG para este evento/rol
+        $stmt = $db->prepare("
+            SELECT archivo_plantilla, nombre_plantilla, rol as plantilla_rol
+            FROM plantillas_certificados 
+            WHERE evento_id = ? AND (rol = ? OR rol = 'General')
+            ORDER BY CASE WHEN rol = ? THEN 1 ELSE 2 END
+            LIMIT 1
+        ");
+        $stmt->execute([$participante['evento_id'], $participante['rol'], $participante['rol']]);
+        $plantilla = $stmt->fetch();
         
-        // Convertir HTML a PDF usando mPDF simple o generar PDF básico
-        $pdf_content = generarPDFConHTML($html_certificado, $participante, $codigo_verificacion);
+        if ($plantilla && file_exists(TEMPLATE_PATH . $plantilla['archivo_plantilla'])) {
+            // Usar plantilla SVG
+            $contenido_plantilla = file_get_contents(TEMPLATE_PATH . $plantilla['archivo_plantilla']);
+            
+            if ($contenido_plantilla === false) {
+                throw new Exception("No se pudo leer la plantilla SVG");
+            }
+            
+            $contenido_final = procesarPlantillaSVG($contenido_plantilla, $participante, $codigo_verificacion);
+            $nombre_archivo = $codigo_verificacion . '_' . time() . '.svg';
+            $tipo_archivo = 'svg';
+            $plantilla_usada = $plantilla['nombre_plantilla'] . ' (Rol: ' . $plantilla['plantilla_rol'] . ')';
+            
+        } else {
+            // Fallback a PDF básico si no hay plantilla
+            $contenido_final = generarPDFBasico($participante, $codigo_verificacion);
+            $nombre_archivo = $codigo_verificacion . '_' . time() . '.pdf';
+            $tipo_archivo = 'pdf';
+            $plantilla_usada = 'PDF básico (sin plantilla SVG)';
+        }
         
-        // Generar nombre de archivo
-        $nombre_archivo = $codigo_verificacion . '_' . time() . '.pdf';
         $ruta_completa = GENERATED_PATH . 'certificados/' . $nombre_archivo;
         
         // Asegurar que el directorio existe
@@ -93,9 +118,14 @@ function generarCertificadoPDFReal($participante) {
             mkdir(GENERATED_PATH . 'certificados/', 0755, true);
         }
         
-        // Guardar PDF
-        if (file_put_contents($ruta_completa, $pdf_content) === false) {
-            throw new Exception("No se pudo escribir el archivo PDF");
+        // Guardar archivo
+        if (file_put_contents($ruta_completa, $contenido_final) === false) {
+            throw new Exception("No se pudo escribir el archivo del certificado");
+        }
+        
+        // Verificar que el archivo se guardó correctamente
+        if (!file_exists($ruta_completa) || filesize($ruta_completa) === 0) {
+            throw new Exception("El archivo del certificado no se guardó correctamente");
         }
         
         // Generar hash de validación
@@ -104,7 +134,7 @@ function generarCertificadoPDFReal($participante) {
         // Insertar en base de datos
         $stmt = $db->prepare("
             INSERT INTO certificados (participante_id, evento_id, codigo_verificacion, archivo_pdf, hash_validacion, tipo_archivo, fecha_generacion)
-            VALUES (?, ?, ?, ?, ?, 'pdf', NOW())
+            VALUES (?, ?, ?, ?, ?, ?, NOW())
         ");
         
         $resultado_bd = $stmt->execute([
@@ -112,29 +142,35 @@ function generarCertificadoPDFReal($participante) {
             $participante['evento_id'],
             $codigo_verificacion,
             $nombre_archivo,
-            $hash_validacion
+            $hash_validacion,
+            $tipo_archivo
         ]);
         
         if (!$resultado_bd) {
-            throw new Exception("Error al insertar en base de datos");
+            throw new Exception("Error al insertar el certificado en la base de datos");
         }
         
+        $certificado_id = $db->lastInsertId();
+        
         // Registrar auditoría
-        registrarAuditoria('GENERAR_CERTIFICADO_INDIVIDUAL', 'certificados', $db->lastInsertId(), null, [
+        registrarAuditoria('GENERAR_CERTIFICADO_INDIVIDUAL', 'certificados', $certificado_id, null, [
             'participante_id' => $participante['id'],
             'codigo_verificacion' => $codigo_verificacion,
-            'tipo_archivo' => 'pdf'
+            'tipo_archivo' => $tipo_archivo,
+            'plantilla_usada' => $plantilla_usada,
+            'tamaño_archivo' => filesize($ruta_completa)
         ]);
         
         return [
             'success' => true,
             'codigo_verificacion' => $codigo_verificacion,
-            'tipo' => 'pdf',
-            'archivo' => $nombre_archivo
+            'tipo' => $tipo_archivo,
+            'archivo' => $nombre_archivo,
+            'plantilla_usada' => $plantilla_usada
         ];
         
     } catch (Exception $e) {
-        error_log("Error generando PDF real: " . $e->getMessage());
+        error_log("Error generando certificado con plantilla: " . $e->getMessage());
         return [
             'success' => false,
             'error' => $e->getMessage()
@@ -142,327 +178,127 @@ function generarCertificadoPDFReal($participante) {
     }
 }
 
-function generarHTMLCertificado($participante, $codigo_verificacion) {
-    $nombre_completo = strtoupper($participante['nombres'] . ' ' . $participante['apellidos']);
-    $fecha_inicio = formatearFecha($participante['fecha_inicio']);
-    $fecha_fin = formatearFecha($participante['fecha_fin']);
-    $fecha_actual = date('d/m/Y');
+function procesarPlantillaSVG($contenido_plantilla, $participante, $codigo_verificacion) {
+    // Variables de reemplazo completas
+    $variables = [
+        // DATOS DEL PARTICIPANTE
+        '{{nombres}}' => $participante['nombres'],
+        '{{apellidos}}' => $participante['apellidos'],
+        '{{numero_identificacion}}' => $participante['numero_identificacion'],
+        '{{correo_electronico}}' => $participante['correo_electronico'] ?? '',
+        '{{telefono}}' => $participante['telefono'] ?? '',
+        '{{institucion}}' => $participante['institucion'] ?? '',
+        '{{rol}}' => $participante['rol'],
+        
+        // DATOS DEL EVENTO
+        '{{evento_nombre}}' => $participante['evento_nombre'],
+        '{{fecha_inicio}}' => formatearFecha($participante['fecha_inicio']),
+        '{{fecha_fin}}' => formatearFecha($participante['fecha_fin']),
+        '{{entidad_organizadora}}' => $participante['entidad_organizadora'],
+        '{{modalidad}}' => ucfirst($participante['modalidad']),
+        '{{lugar}}' => $participante['lugar'] ?: 'Virtual',
+        '{{horas_duracion}}' => $participante['horas_duracion'] ?: '0',
+        '{{descripcion}}' => $participante['descripcion'] ?? '',
+        
+        // DATOS DEL CERTIFICADO
+        '{{codigo_verificacion}}' => $codigo_verificacion,
+        '{{fecha_generacion}}' => date('d/m/Y H:i'),
+        '{{fecha_emision}}' => date('d/m/Y'),
+        '{{año}}' => date('Y'),
+        '{{mes}}' => date('m'),
+        '{{dia}}' => date('d'),
+        
+        // URLs Y ENLACES
+        '{{url_verificacion}}' => PUBLIC_URL . 'verificar.php?codigo=' . $codigo_verificacion,
+        '{{numero_certificado}}' => 'CERT-' . date('Y') . '-' . str_pad($participante['id'], 6, '0', STR_PAD_LEFT),
+        
+        // EXTRAS ÚTILES
+        '{{nombre_completo}}' => $participante['nombres'] . ' ' . $participante['apellidos'],
+        '{{iniciales}}' => strtoupper(substr($participante['nombres'], 0, 1) . substr($participante['apellidos'], 0, 1)),
+        '{{mes_nombre}}' => obtenerNombreMes(date('n')),
+        '{{año_completo}}' => date('Y'),
+        '{{duracion_texto}}' => ($participante['horas_duracion'] ? $participante['horas_duracion'] . ' horas académicas' : 'Duración no especificada'),
+        '{{modalidad_completa}}' => 'Modalidad ' . ucfirst($participante['modalidad']),
+        '{{periodo_evento}}' => formatearFecha($participante['fecha_inicio']) . ' al ' . formatearFecha($participante['fecha_fin']),
+        
+        // DATOS INSTITUCIONALES
+        '{{firma_digital}}' => 'Certificado Digital Verificado',
+        '{{sello_institucional}}' => 'Universidad Distrital Francisco José de Caldas',
+        '{{departamento}}' => 'Sistema de Gestión de Proyectos y Oficina de Extensión (SGPOE)'
+    ];
     
-    return "<!DOCTYPE html>
-<html>
-<head>
-    <meta charset='UTF-8'>
-    <title>Certificado - $nombre_completo</title>
-    <style>
-        @page { size: A4 landscape; margin: 1.5cm; }
-        body {
-            font-family: 'Times New Roman', serif;
-            margin: 0;
-            padding: 30px;
-            text-align: center;
-            line-height: 1.6;
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-        }
-        .certificate {
-            background: white;
-            border: 6px solid #1a2980;
-            border-radius: 15px;
-            padding: 40px 30px;
-            margin: 0 auto;
-            position: relative;
-            box-shadow: 0 0 20px rgba(0,0,0,0.1);
-        }
-        .header {
-            border-bottom: 2px solid #26d0ce;
-            padding-bottom: 20px;
-            margin-bottom: 30px;
-        }
-        .institution {
-            font-size: 16px;
-            font-weight: bold;
-            color: #1a2980;
-            margin-bottom: 8px;
-            text-transform: uppercase;
-        }
-        .department {
-            font-size: 12px;
-            color: #666;
-            margin-bottom: 15px;
-        }
-        .title {
-            font-size: 28px;
-            font-weight: bold;
-            color: #1a2980;
-            margin: 25px 0;
-            text-transform: uppercase;
-            letter-spacing: 2px;
-        }
-        .certifies {
-            font-size: 16px;
-            margin: 20px 0 15px 0;
-            color: #333;
-        }
-        .participant-name {
-            font-size: 24px;
-            font-weight: bold;
-            color: #26d0ce;
-            margin: 15px 0;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        .participant-id {
-            font-size: 14px;
-            color: #666;
-            margin-bottom: 20px;
-        }
-        .event-info {
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 10px;
-            padding: 20px;
-            margin: 20px 0;
-            color: #333;
-        }
-        .event-name {
-            font-size: 18px;
-            font-weight: bold;
-            color: #1a2980;
-            margin-bottom: 10px;
-        }
-        .event-details {
-            font-size: 13px;
-            line-height: 1.6;
-        }
-        .footer {
-            margin-top: 30px;
-            border-top: 1px solid #e9ecef;
-            padding-top: 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .verification {
-            text-align: left;
-            font-size: 11px;
-        }
-        .verification-code {
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            font-weight: bold;
-            color: #1a2980;
-            background: #f8f9fa;
-            padding: 5px 8px;
-            border-radius: 3px;
-            border: 1px solid #dee2e6;
-        }
-        .signature {
-            text-align: right;
-            font-size: 11px;
-        }
-        .signature-line {
-            border-top: 1px solid #333;
-            width: 150px;
-            margin: 15px 0 8px auto;
-        }
-        .decorative-border {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            right: 10px;
-            bottom: 10px;
-            border: 1px solid #26d0ce;
-            border-radius: 10px;
-            pointer-events: none;
-            opacity: 0.5;
-        }
-    </style>
-</head>
-<body>
-    <div class='certificate'>
-        <div class='decorative-border'></div>
-        
-        <div class='header'>
-            <div class='institution'>Universidad Distrital Francisco José de Caldas</div>
-            <div class='department'>Sistema de Gestión de Proyectos y Oficina de Extensión (SGPOE)</div>
-        </div>
-        
-        <div class='title'>Certificado de Participación</div>
-        
-        <div class='certifies'>Se certifica que:</div>
-        
-        <div class='participant-name'>$nombre_completo</div>
-        <div class='participant-id'>Documento de Identidad: {$participante['numero_identificacion']}</div>
-        
-        <div class='event-info'>
-            <div class='event-name'>{$participante['evento_nombre']}</div>
-            <div class='event-details'>
-                <strong>Realizado:</strong> del $fecha_inicio al $fecha_fin<br>
-                <strong>Modalidad:</strong> " . ucfirst($participante['modalidad']) . "<br>
-                <strong>Lugar:</strong> " . ($participante['lugar'] ?: 'Virtual') . "<br>
-                <strong>Entidad Organizadora:</strong> {$participante['entidad_organizadora']}<br>
-                <strong>Duración:</strong> " . ($participante['horas_duracion'] ? $participante['horas_duracion'] . ' horas académicas' : 'No especificada') . "<br>
-                <strong>En calidad de:</strong> {$participante['rol']}
-            </div>
-        </div>
-        
-        <div class='footer'>
-            <div class='verification'>
-                <div>Código de verificación:</div>
-                <div class='verification-code'>$codigo_verificacion</div>
-                <div style='margin-top: 8px; font-size: 10px;'>
-                    Verificar en: " . PUBLIC_URL . "verificar.php
-                </div>
-            </div>
-            
-            <div class='signature'>
-                <div class='signature-line'></div>
-                <div>Firma Digital Autorizada</div>
-                <div>Bogotá D.C., $fecha_actual</div>
-            </div>
-        </div>
-    </div>
-</body>
-</html>";
+    // Reemplazar variables en la plantilla
+    $contenido_procesado = $contenido_plantilla;
+    foreach ($variables as $variable => $valor) {
+        // Usar htmlspecialchars para caracteres XML seguros
+        $valor_seguro = htmlspecialchars($valor, ENT_XML1 | ENT_COMPAT, 'UTF-8');
+        $contenido_procesado = str_replace($variable, $valor_seguro, $contenido_procesado);
+    }
+    
+    // Limpiar variables no utilizadas (opcional)
+    $contenido_procesado = preg_replace('/\{\{[^}]+\}\}/', '', $contenido_procesado);
+    
+    // Asegurar que el SVG tiene la declaración XML correcta
+    if (strpos($contenido_procesado, '<?xml') === false) {
+        $contenido_procesado = '<?xml version="1.0" encoding="UTF-8"?>' . "\n" . $contenido_procesado;
+    }
+    
+    return $contenido_procesado;
 }
 
-function generarPDFConHTML($html_content, $participante, $codigo_verificacion) {
-    // Generar un PDF básico pero válido con estructura PDF real
+function generarPDFBasico($participante, $codigo_verificacion) {
+    // Fallback PDF básico cuando no hay plantilla SVG
     $nombre_completo = strtoupper($participante['nombres'] . ' ' . $participante['apellidos']);
     $fecha_inicio = formatearFecha($participante['fecha_inicio']);
     $fecha_fin = formatearFecha($participante['fecha_fin']);
     $fecha_actual = date('d/m/Y');
     
-    // Crear contenido del certificado en formato texto para PDF
-    $contenido_certificado = "
-                    CERTIFICADO DE PARTICIPACION
-                    
-        UNIVERSIDAD DISTRITAL FRANCISCO JOSE DE CALDAS
-    SISTEMA DE GESTION DE PROYECTOS Y OFICINA DE EXTENSION (SGPOE)
-    
-    
-                        Se certifica que:
-                        
-                    $nombre_completo
-                    
-              Documento de Identidad: {$participante['numero_identificacion']}
-              
-              
-            Participo exitosamente en el evento:
-            
-                    {$participante['evento_nombre']}
-                    
-                    
-    Realizado del $fecha_inicio al $fecha_fin
-    Modalidad: " . ucfirst($participante['modalidad']) . "
-    Lugar: " . ($participante['lugar'] ?: 'Virtual') . "
-    Entidad Organizadora: {$participante['entidad_organizadora']}
-    Duracion: " . ($participante['horas_duracion'] ? $participante['horas_duracion'] . ' horas academicas' : 'No especificada') . "
-    En calidad de: {$participante['rol']}
-    
-    
-    Expedido en Bogota D.C., a los $fecha_actual
-    
-    Codigo de Verificacion: $codigo_verificacion
-    
-    Consulte la autenticidad en: " . PUBLIC_URL . "verificar.php
-    
-    
-    Este es un certificado digital generado automaticamente.
-    Para verificar su autenticidad, ingrese el codigo de verificacion 
-    en nuestro sitio web.
-    
-    
-    -----------------------------------------------------------
-    SGPOE - Universidad Distrital Francisco Jose de Caldas
-    " . date('Y') . "
-    ";
+    // Contenido del certificado en texto plano
+    $contenido_certificado = "CERTIFICADO DE PARTICIPACIÓN
 
-    // Generar estructura PDF básica pero válida
-    $pdf_header = "%PDF-1.4
-1 0 obj
-<<
-/Type /Catalog
-/Pages 2 0 R
->>
-endobj
+UNIVERSIDAD DISTRITAL FRANCISCO JOSÉ DE CALDAS
+SISTEMA DE GESTIÓN DE PROYECTOS Y OFICINA DE EXTENSIÓN (SGPOE)
 
-2 0 obj
-<<
-/Type /Pages
-/Kids [3 0 R]
-/Count 1
->>
-endobj
+Se certifica que:
 
-3 0 obj
-<<
-/Type /Page
-/Parent 2 0 R
-/MediaBox [0 0 842 595]
-/Contents 4 0 R
-/Resources <<
-/Font <<
-/F1 5 0 R
->>
->>
->>
-endobj
+$nombre_completo
+Documento de Identidad: {$participante['numero_identificacion']}
 
-4 0 obj
-<<
-/Length " . (strlen($contenido_certificado) + 100) . "
->>
-stream
-BT
-/F1 12 Tf
-50 550 Td
-";
+Participó exitosamente en el evento:
 
-    // Dividir el contenido en líneas y agregar al PDF
-    $lineas = explode("\n", $contenido_certificado);
-    $pdf_content = "";
-    $y_offset = 0;
-    
-    foreach ($lineas as $linea) {
-        $linea_limpia = trim($linea);
-        if (!empty($linea_limpia)) {
-            $pdf_content .= "($linea_limpia) Tj\n0 -15 Td\n";
-        } else {
-            $pdf_content .= "0 -10 Td\n";
-        }
-    }
+{$participante['evento_nombre']}
 
-    $pdf_footer = "ET
-endstream
-endobj
+Realizado del $fecha_inicio al $fecha_fin
+Modalidad: " . ucfirst($participante['modalidad']) . "
+Lugar: " . ($participante['lugar'] ?: 'Virtual') . "
+Entidad Organizadora: {$participante['entidad_organizadora']}
+Duración: " . ($participante['horas_duracion'] ? $participante['horas_duracion'] . ' horas académicas' : 'No especificada') . "
 
-5 0 obj
-<<
-/Type /Font
-/Subtype /Type1
-/BaseFont /Helvetica
->>
-endobj
+En calidad de: {$participante['rol']}
 
-xref
-0 6
-0000000000 65535 f 
-0000000010 00000 n 
-0000000079 00000 n 
-0000000173 00000 n 
-0000000301 00000 n 
-0000002350 00000 n 
-trailer
-<<
-/Size 6
-/Root 1 0 R
->>
-startxref
-2440
-%%EOF";
+Expedido en Bogotá D.C., a los $fecha_actual
 
-    // Combinar todo el contenido del PDF
-    return $pdf_header . $pdf_content . $pdf_footer;
+Código de Verificación: $codigo_verificacion
+Consulte la autenticidad en: " . PUBLIC_URL . "verificar.php
+
+Este es un certificado digital generado automáticamente.
+Para verificar su autenticidad, ingrese el código de verificación en nuestro sitio web.
+
+---
+SGPOE - Universidad Distrital Francisco José de Caldas
+" . date('Y');
+
+    return $contenido_certificado;
+}
+
+// Función auxiliar para obtener nombre del mes
+function obtenerNombreMes($numero_mes) {
+    $meses = [
+        1 => 'Enero', 2 => 'Febrero', 3 => 'Marzo', 4 => 'Abril',
+        5 => 'Mayo', 6 => 'Junio', 7 => 'Julio', 8 => 'Agosto',
+        9 => 'Septiembre', 10 => 'Octubre', 11 => 'Noviembre', 12 => 'Diciembre'
+    ];
+    return $meses[$numero_mes] ?? 'Mes';
 }
 
 // Función auxiliar para formatear fechas

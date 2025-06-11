@@ -1,5 +1,5 @@
 <?php
-// admin/certificados/descargar.php - SOLUCIÓN ULTRA ROBUSTA
+// admin/certificados/descargar.php - VERSIÓN MEJORADA CON IMPRESIÓN
 require_once '../../config/config.php';
 require_once '../../includes/funciones.php';
 
@@ -412,6 +412,18 @@ function mostrarPaginaCertificado($certificado, $contenido, $es_svg, $es_html) {
                 box-shadow: 0 4px 15px rgba(113, 128, 150, 0.4);
             }
             
+            .btn-print {
+                background: #ed8936;
+                color: white;
+                box-shadow: 0 2px 8px rgba(237, 137, 54, 0.3);
+            }
+            
+            .btn-print:hover {
+                background: #dd6b20;
+                transform: translateY(-1px);
+                box-shadow: 0 4px 15px rgba(237, 137, 54, 0.4);
+            }
+            
             .file-type-badge {
                 display: inline-block;
                 background: #805ad5;
@@ -486,8 +498,8 @@ function mostrarPaginaCertificado($certificado, $contenido, $es_svg, $es_html) {
                         <div class="info-item">
                             <div class="info-label">Tipo de archivo</div>
                             <div class="info-value">
-                                <span class="file-type-badge"><?php echo $es_svg ? 'SVG' : 'PDF'; ?></span>
-                                <?php echo $es_svg ? 'Gráfico vectorial' : 'Documento PDF'; ?>
+                                <span class="file-type-badge"><?php echo $es_svg ? 'SVG' : ($es_html ? 'HTML' : 'PDF'); ?></span>
+                                <?php echo $es_svg ? 'Gráfico vectorial' : ($es_html ? 'Documento HTML' : 'Documento PDF'); ?>
                             </div>
                         </div>
                         
@@ -522,15 +534,25 @@ function mostrarPaginaCertificado($certificado, $contenido, $es_svg, $es_html) {
                         <div class="pdf-placeholder">
                             <div class="pdf-icon">📄</div>
                             <h3>Certificado PDF</h3>
-                            <p>Este certificado está en formato PDF.<br>Use el botón de descarga para obtener el archivo.</p>
+                            <p>Este certificado está en formato PDF.<br>Use el botón de impresión para obtener una copia física.</p>
                         </div>
                     <?php endif; ?>
                 </div>
                 
                 <div class="actions">
+                    <?php if ($es_svg || $es_html): ?>
+                        <button onclick="imprimirCertificado()" class="btn btn-print">
+                            🖨️ Imprimir Certificado
+                        </button>
+                    <?php else: ?>
+                        <button onclick="imprimirPDF()" class="btn btn-print">
+                            🖨️ Imprimir Certificado
+                        </button>
+                    <?php endif; ?>
+                    
                     <a href="?participante_id=<?php echo $participante_id; ?>&action=download" 
                        class="btn btn-success" <?php echo $es_html ? '' : 'target="_blank"'; ?>>
-                        📥 <?php echo $es_html ? 'Ver e Imprimir' : 'Descargar Certificado'; ?>
+                        📥 Descargar Archivo
                     </a>
                     
                     <a href="<?php echo PUBLIC_URL; ?>verificar.php?codigo=<?php echo urlencode($certificado['codigo_verificacion']); ?>" 
@@ -538,11 +560,9 @@ function mostrarPaginaCertificado($certificado, $contenido, $es_svg, $es_html) {
                         🔍 Verificar Online
                     </a>
                     
-                    <?php if ($es_svg || $es_html): ?>
-                    <button onclick="window.print()" class="btn btn-secondary">
-                        🖨️ Imprimir
+                    <button onclick="abrirEnNuevaVentana()" class="btn btn-secondary">
+                        🔗 Nueva Ventana
                     </button>
-                    <?php endif; ?>
                     
                     <a href="../participantes/listar.php" class="btn btn-secondary">
                         ← Volver a Lista
@@ -550,6 +570,171 @@ function mostrarPaginaCertificado($certificado, $contenido, $es_svg, $es_html) {
                 </div>
             </div>
         </div>
+        
+        <script>
+            function imprimirCertificado() {
+                // Para SVG y HTML - imprimir solo el contenido del certificado
+                const contenido = document.querySelector('.certificate-display').innerHTML;
+                const nombreParticipante = '<?php echo htmlspecialchars($certificado['nombres'] . ' ' . $certificado['apellidos']); ?>';
+                const ventana = window.open('', '_blank', 'width=1200,height=900');
+                
+                ventana.document.write(`
+                    <html>
+                    <head>
+                        <title>Imprimir Certificado - ${nombreParticipante}</title>
+                        <style>
+                            @page {
+                                size: A4 landscape;
+                                margin: 0.5in;
+                            }
+                            body { 
+                                margin: 0; 
+                                padding: 20px; 
+                                background: white; 
+                                display: flex; 
+                                justify-content: center; 
+                                align-items: center; 
+                                min-height: 100vh;
+                                font-family: Arial, sans-serif;
+                            }
+                            .container { 
+                                background: white; 
+                                padding: 0;
+                                text-align: center;
+                                max-width: 100%;
+                            }
+                            svg { 
+                                max-width: 100%; 
+                                height: auto; 
+                                display: block;
+                            }
+                            iframe {
+                                width: 100%;
+                                height: 80vh;
+                                border: none;
+                            }
+                            @media print {
+                                body { padding: 0; }
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            ${contenido}
+                        </div>
+                        <script>
+                            window.onload = function() { 
+                                setTimeout(function() {
+                                    window.print(); 
+                                }, 500);
+                            }
+                        <\/script>
+                    </body>
+                    </html>
+                `);
+                ventana.document.close();
+            }
+            
+            function imprimirPDF() {
+                // Para archivos PDF - abrir en nueva ventana para imprimir
+                const url = '?participante_id=<?php echo $participante_id; ?>&action=download';
+                const ventana = window.open(url, '_blank');
+                
+                // Intentar imprimir después de que cargue
+                ventana.onload = function() {
+                    setTimeout(function() {
+                        ventana.print();
+                    }, 1000);
+                };
+            }
+            
+            function abrirEnNuevaVentana() {
+                const contenido = document.querySelector('.certificate-display').innerHTML;
+                const nombreParticipante = '<?php echo htmlspecialchars($certificado['nombres'] . ' ' . $certificado['apellidos']); ?>';
+                const ventana = window.open('', '_blank', 'width=1200,height=900');
+                
+                ventana.document.write(`
+                    <html>
+                    <head>
+                        <title>Certificado - ${nombreParticipante}</title>
+                        <style>
+                            body { 
+                                margin: 0; 
+                                padding: 20px; 
+                                background: #f5f5f5; 
+                                display: flex; 
+                                justify-content: center; 
+                                align-items: center; 
+                                min-height: 100vh;
+                                font-family: Arial, sans-serif;
+                            }
+                            .container { 
+                                background: white; 
+                                padding: 20px; 
+                                border-radius: 8px; 
+                                box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+                                max-width: 100%;
+                                text-align: center;
+                            }
+                            svg { 
+                                max-width: 100%; 
+                                height: auto; 
+                                display: block;
+                            }
+                            iframe {
+                                width: 100%;
+                                height: 80vh;
+                                border: 1px solid #ddd;
+                                border-radius: 4px;
+                            }
+                            .btn-print {
+                                background: #ed8936;
+                                color: white;
+                                border: none;
+                                padding: 10px 20px;
+                                border-radius: 5px;
+                                cursor: pointer;
+                                font-weight: bold;
+                                margin-top: 15px;
+                            }
+                            .btn-print:hover {
+                                background: #dd6b20;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            ${contenido}
+                            <button class="btn-print" onclick="window.print()">🖨️ Imprimir</button>
+                        </div>
+                    </body>
+                    </html>
+                `);
+                ventana.document.close();
+            }
+            
+            // Ajustar tamaño del SVG según el viewport
+            window.addEventListener('resize', function() {
+                const svgContainer = document.querySelector('.certificate-display');
+                if (svgContainer) {
+                    const svg = svgContainer.querySelector('svg');
+                    if (svg) {
+                        const containerWidth = svgContainer.clientWidth - 40; // 40px para padding
+                        const svgWidth = svg.getAttribute('width') || svg.viewBox?.baseVal.width || 1200;
+                        
+                        if (svgWidth > containerWidth) {
+                            svg.style.width = '100%';
+                            svg.style.height = 'auto';
+                        }
+                    }
+                }
+            });
+            
+            // Ejecutar al cargar
+            window.addEventListener('load', function() {
+                window.dispatchEvent(new Event('resize'));
+            });
+        </script>
     </body>
     </html>
     <?php

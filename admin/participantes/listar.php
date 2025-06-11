@@ -554,7 +554,7 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
                                 <td>
                                     <div class="actions">
                                         <?php if ($participante['tiene_certificado'] > 0): ?>
-                                            <a href="../certificados/vista.php?participante_id=<?php echo $participante['id']; ?>" class="btn-sm btn-view">Ver</a>
+                                            <a href="../certificados/descargar.php?participante_id=<?php echo $participante['id']; ?>" class="btn-sm btn-view">Ver</a>
                                         <?php else: ?>
                                             <form method="POST" action="generar_individual.php" style="display: inline;">
                                                 <input type="hidden" name="participante_id" value="<?php echo $participante['id']; ?>">

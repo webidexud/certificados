@@ -30,7 +30,13 @@ function generarCodigoUnico() {
 
 // Función para limpiar datos de entrada
 function limpiarDatos($data) {
-    return htmlspecialchars(strip_tags(trim($data)), ENT_QUOTES, 'UTF-8');
+    if ($data === null) {
+        return '';
+    }
+    $data = trim($data);
+    $data = stripslashes($data);
+    $data = htmlspecialchars($data);
+    return $data;
 }
 
 // Función para validar email
