@@ -3,7 +3,7 @@ require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../config/config.php';
 
 // Función para generar código de verificación único
-function generarCodigoVerificacion($longitud = CODIGO_LONGITUD) {
+function generarCodigoVerificacion($longitud = 12) {
     $caracteres = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     $codigo = '';
     for ($i = 0; $i < $longitud; $i++) {
@@ -19,6 +19,7 @@ function codigoExiste($codigo) {
     $stmt->execute([$codigo]);
     return $stmt->fetchColumn() > 0;
 }
+
 
 // Función para generar código único
 function generarCodigoUnico() {
@@ -43,7 +44,12 @@ function limpiarDatos($data) {
 function validarEmail($email) {
     return filter_var($email, FILTER_VALIDATE_EMAIL);
 }
-
+// Función para formatear fecha (si no existe)
+if (!function_exists('formatearFecha')) {
+    function formatearFecha($fecha, $formato = 'd/m/Y') {
+        return date($formato, strtotime($fecha));
+    }
+}
 // Función para validar fecha
 function validarFecha($fecha) {
     $d = DateTime::createFromFormat('Y-m-d', $fecha);

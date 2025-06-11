@@ -1,11 +1,8 @@
 <?php
-// admin/participantes/generar_individual.php - VERSIÓN COMPLETA CON PLANTILLAS SVG
+// admin/participantes/generar_individual.php - VERSIÓN CON PLANTILLAS SVG
 require_once '../../config/config.php';
 require_once '../../includes/funciones.php';
-
-// Habilitar reporte de errores para depuración
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
+require_once '../../includes/funciones_svg.php';
 
 verificarAutenticacion();
 
@@ -52,14 +49,37 @@ try {
         exit;
     }
     
-    // GENERAR CERTIFICADO CON PLANTILLA SVG
-    $resultado = generarCertificadoConPlantilla($participante);
+    // BUSCAR PLANTILLA PARA EL ROL DEL PARTICIPANTE
+    $stmt = $db->prepare("
+        SELECT * FROM plantillas_certificados 
+        WHERE evento_id = ? AND (rol = ? OR rol = 'General') 
+        ORDER BY CASE WHEN rol = ? THEN 1 ELSE 2 END 
+        LIMIT 1
+    ");
+    $stmt->execute([$participante['evento_id'], $participante['rol'], $participante['rol']]);
+    $plantilla = $stmt->fetch();
+    
+    if (!$plantilla) {
+        $_SESSION['error_mensaje'] = 'No hay plantilla configurada para el rol "' . $participante['rol'] . '" en este evento. Configure la plantilla primero.';
+        header('Location: listar.php');
+        exit;
+    }
+    
+    // Verificar que el archivo de plantilla existe
+    $ruta_plantilla = TEMPLATE_PATH . $plantilla['archivo_plantilla'];
+    if (!file_exists($ruta_plantilla)) {
+        $_SESSION['error_mensaje'] = 'El archivo de plantilla no existe. Suba nuevamente la plantilla.';
+        header('Location: listar.php');
+        exit;
+    }
+    
+    // GENERAR CERTIFICADO CON LA PLANTILLA
+    $resultado = generarCertificadoConPlantilla($participante, $plantilla);
     
     if ($resultado['success']) {
         $_SESSION['success_mensaje'] = 'Certificado generado exitosamente para ' . 
                                       $participante['nombres'] . ' ' . $participante['apellidos'] . 
-                                      '. Código: ' . $resultado['codigo_verificacion'] .
-                                      ' (Tipo: ' . strtoupper($resultado['tipo']) . ')';
+                                      '. Código: ' . $resultado['codigo_verificacion'];
     } else {
         $_SESSION['error_mensaje'] = 'Error al generar certificado: ' . $resultado['error'];
     }
@@ -72,45 +92,73 @@ try {
 header('Location: listar.php');
 exit;
 
-function generarCertificadoConPlantilla($participante) {
+function generarCertificadoConPlantilla($participante, $plantilla) {
     try {
         $db = Database::getInstance()->getConnection();
         
         // Generar código único
         $codigo_verificacion = generarCodigoUnico();
         
-        // Buscar plantilla SVG para este evento/rol
-        $stmt = $db->prepare("
-            SELECT archivo_plantilla, nombre_plantilla, rol as plantilla_rol
-            FROM plantillas_certificados 
-            WHERE evento_id = ? AND (rol = ? OR rol = 'General')
-            ORDER BY CASE WHEN rol = ? THEN 1 ELSE 2 END
-            LIMIT 1
-        ");
-        $stmt->execute([$participante['evento_id'], $participante['rol'], $participante['rol']]);
-        $plantilla = $stmt->fetch();
+        // Leer contenido de la plantilla SVG
+        $ruta_plantilla = TEMPLATE_PATH . $plantilla['archivo_plantilla'];
+        $contenido_svg = file_get_contents($ruta_plantilla);
         
-        if ($plantilla && file_exists(TEMPLATE_PATH . $plantilla['archivo_plantilla'])) {
-            // Usar plantilla SVG
-            $contenido_plantilla = file_get_contents(TEMPLATE_PATH . $plantilla['archivo_plantilla']);
-            
-            if ($contenido_plantilla === false) {
-                throw new Exception("No se pudo leer la plantilla SVG");
-            }
-            
-            $contenido_final = procesarPlantillaSVG($contenido_plantilla, $participante, $codigo_verificacion);
-            $nombre_archivo = $codigo_verificacion . '_' . time() . '.svg';
-            $tipo_archivo = 'svg';
-            $plantilla_usada = $plantilla['nombre_plantilla'] . ' (Rol: ' . $plantilla['plantilla_rol'] . ')';
-            
-        } else {
-            // Fallback a PDF básico si no hay plantilla
-            $contenido_final = generarPDFBasico($participante, $codigo_verificacion);
-            $nombre_archivo = $codigo_verificacion . '_' . time() . '.pdf';
-            $tipo_archivo = 'pdf';
-            $plantilla_usada = 'PDF básico (sin plantilla SVG)';
+        if ($contenido_svg === false) {
+            throw new Exception("No se pudo leer la plantilla SVG");
         }
         
+        // Preparar datos para reemplazar en la plantilla
+        $datos_certificado = [
+            '{{nombres}}' => $participante['nombres'],
+            '{{apellidos}}' => $participante['apellidos'],
+            '{{numero_identificacion}}' => $participante['numero_identificacion'],
+            '{{correo_electronico}}' => $participante['correo_electronico'],
+            '{{rol}}' => $participante['rol'],
+            '{{telefono}}' => $participante['telefono'] ?: '',
+            '{{institucion}}' => $participante['institucion'] ?: '',
+            
+            // Datos del evento
+            '{{evento_nombre}}' => $participante['evento_nombre'],
+            '{{fecha_inicio}}' => formatearFecha($participante['fecha_inicio']),
+            '{{fecha_fin}}' => formatearFecha($participante['fecha_fin']),
+            '{{entidad_organizadora}}' => $participante['entidad_organizadora'],
+            '{{modalidad}}' => ucfirst($participante['modalidad']),
+            '{{lugar}}' => $participante['lugar'] ?: 'Virtual',
+            '{{horas_duracion}}' => $participante['horas_duracion'] ?: '0',
+            
+            // Datos del certificado
+            '{{codigo_verificacion}}' => $codigo_verificacion,
+            '{{fecha_generacion}}' => date('d/m/Y H:i'),
+            '{{fecha_emision}}' => date('d/m/Y'),
+            '{{año}}' => date('Y'),
+            '{{mes}}' => date('m'),
+            '{{dia}}' => date('d'),
+            
+            // URLs y enlaces
+            '{{url_verificacion}}' => PUBLIC_URL . 'verificar.php?codigo=' . $codigo_verificacion,
+            '{{numero_certificado}}' => 'CERT-' . date('Y') . '-' . str_pad($participante['id'], 6, '0', STR_PAD_LEFT),
+            
+            // Extras
+            '{{nombre_completo}}' => $participante['nombres'] . ' ' . $participante['apellidos'],
+            '{{iniciales}}' => strtoupper(substr($participante['nombres'], 0, 1) . substr($participante['apellidos'], 0, 1)),
+            '{{duracion_texto}}' => ($participante['horas_duracion'] ? $participante['horas_duracion'] . ' horas académicas' : 'Duración no especificada'),
+            '{{modalidad_completa}}' => 'Modalidad ' . ucfirst($participante['modalidad']),
+        ];
+        
+        // Procesar el SVG con manejo de texto largo
+        $svg_procesado = procesarTextoSVG($contenido_svg, $datos_certificado);
+        
+        // Procesar nombres largos específicamente
+        $svg_procesado = procesarNombresLargos($svg_procesado, $participante['nombres'], $participante['apellidos']);
+        
+        // Procesar eventos largos
+        $svg_procesado = procesarEventosLargos($svg_procesado, $participante['evento_nombre']);
+        
+        // Optimizar SVG para mejor renderizado
+        $svg_procesado = optimizarSVGTexto($svg_procesado);
+        
+        // Generar nombre de archivo
+        $nombre_archivo = $codigo_verificacion . '_' . time() . '.svg';
         $ruta_completa = GENERATED_PATH . 'certificados/' . $nombre_archivo;
         
         // Asegurar que el directorio existe
@@ -118,23 +166,21 @@ function generarCertificadoConPlantilla($participante) {
             mkdir(GENERATED_PATH . 'certificados/', 0755, true);
         }
         
-        // Guardar archivo
-        if (file_put_contents($ruta_completa, $contenido_final) === false) {
-            throw new Exception("No se pudo escribir el archivo del certificado");
-        }
-        
-        // Verificar que el archivo se guardó correctamente
-        if (!file_exists($ruta_completa) || filesize($ruta_completa) === 0) {
-            throw new Exception("El archivo del certificado no se guardó correctamente");
+        // Guardar SVG procesado
+        if (file_put_contents($ruta_completa, $svg_procesado) === false) {
+            throw new Exception("No se pudo escribir el archivo SVG");
         }
         
         // Generar hash de validación
         $hash_validacion = hash('sha256', $participante['id'] . $participante['numero_identificacion'] . $codigo_verificacion . date('Y-m-d'));
         
+        // Extraer dimensiones del SVG
+        $dimensiones = extraerDimensionesSVG($svg_procesado);
+        
         // Insertar en base de datos
         $stmt = $db->prepare("
-            INSERT INTO certificados (participante_id, evento_id, codigo_verificacion, archivo_pdf, hash_validacion, tipo_archivo, fecha_generacion)
-            VALUES (?, ?, ?, ?, ?, ?, NOW())
+            INSERT INTO certificados (participante_id, evento_id, codigo_verificacion, archivo_pdf, hash_validacion, tipo_archivo, dimensiones, fecha_generacion)
+            VALUES (?, ?, ?, ?, ?, 'svg', ?, NOW())
         ");
         
         $resultado_bd = $stmt->execute([
@@ -143,34 +189,32 @@ function generarCertificadoConPlantilla($participante) {
             $codigo_verificacion,
             $nombre_archivo,
             $hash_validacion,
-            $tipo_archivo
+            json_encode($dimensiones)
         ]);
         
         if (!$resultado_bd) {
-            throw new Exception("Error al insertar el certificado en la base de datos");
+            throw new Exception("Error al insertar en base de datos");
         }
         
-        $certificado_id = $db->lastInsertId();
-        
         // Registrar auditoría
-        registrarAuditoria('GENERAR_CERTIFICADO_INDIVIDUAL', 'certificados', $certificado_id, null, [
+        registrarAuditoria('GENERAR_CERTIFICADO_SVG', 'certificados', $db->lastInsertId(), null, [
             'participante_id' => $participante['id'],
             'codigo_verificacion' => $codigo_verificacion,
-            'tipo_archivo' => $tipo_archivo,
-            'plantilla_usada' => $plantilla_usada,
-            'tamaño_archivo' => filesize($ruta_completa)
+            'tipo_archivo' => 'svg',
+            'plantilla_usada' => $plantilla['nombre_plantilla'],
+            'rol' => $participante['rol']
         ]);
         
         return [
             'success' => true,
             'codigo_verificacion' => $codigo_verificacion,
-            'tipo' => $tipo_archivo,
+            'tipo' => 'svg',
             'archivo' => $nombre_archivo,
-            'plantilla_usada' => $plantilla_usada
+            'plantilla' => $plantilla['nombre_plantilla']
         ];
         
     } catch (Exception $e) {
-        error_log("Error generando certificado con plantilla: " . $e->getMessage());
+        error_log("Error generando certificado SVG: " . $e->getMessage());
         return [
             'success' => false,
             'error' => $e->getMessage()
@@ -178,131 +222,26 @@ function generarCertificadoConPlantilla($participante) {
     }
 }
 
-function procesarPlantillaSVG($contenido_plantilla, $participante, $codigo_verificacion) {
-    // Variables de reemplazo completas
-    $variables = [
-        // DATOS DEL PARTICIPANTE
-        '{{nombres}}' => $participante['nombres'],
-        '{{apellidos}}' => $participante['apellidos'],
-        '{{numero_identificacion}}' => $participante['numero_identificacion'],
-        '{{correo_electronico}}' => $participante['correo_electronico'] ?? '',
-        '{{telefono}}' => $participante['telefono'] ?? '',
-        '{{institucion}}' => $participante['institucion'] ?? '',
-        '{{rol}}' => $participante['rol'],
-        
-        // DATOS DEL EVENTO
-        '{{evento_nombre}}' => $participante['evento_nombre'],
-        '{{fecha_inicio}}' => formatearFecha($participante['fecha_inicio']),
-        '{{fecha_fin}}' => formatearFecha($participante['fecha_fin']),
-        '{{entidad_organizadora}}' => $participante['entidad_organizadora'],
-        '{{modalidad}}' => ucfirst($participante['modalidad']),
-        '{{lugar}}' => $participante['lugar'] ?: 'Virtual',
-        '{{horas_duracion}}' => $participante['horas_duracion'] ?: '0',
-        '{{descripcion}}' => $participante['descripcion'] ?? '',
-        
-        // DATOS DEL CERTIFICADO
-        '{{codigo_verificacion}}' => $codigo_verificacion,
-        '{{fecha_generacion}}' => date('d/m/Y H:i'),
-        '{{fecha_emision}}' => date('d/m/Y'),
-        '{{año}}' => date('Y'),
-        '{{mes}}' => date('m'),
-        '{{dia}}' => date('d'),
-        
-        // URLs Y ENLACES
-        '{{url_verificacion}}' => PUBLIC_URL . 'verificar.php?codigo=' . $codigo_verificacion,
-        '{{numero_certificado}}' => 'CERT-' . date('Y') . '-' . str_pad($participante['id'], 6, '0', STR_PAD_LEFT),
-        
-        // EXTRAS ÚTILES
-        '{{nombre_completo}}' => $participante['nombres'] . ' ' . $participante['apellidos'],
-        '{{iniciales}}' => strtoupper(substr($participante['nombres'], 0, 1) . substr($participante['apellidos'], 0, 1)),
-        '{{mes_nombre}}' => obtenerNombreMes(date('n')),
-        '{{año_completo}}' => date('Y'),
-        '{{duracion_texto}}' => ($participante['horas_duracion'] ? $participante['horas_duracion'] . ' horas académicas' : 'Duración no especificada'),
-        '{{modalidad_completa}}' => 'Modalidad ' . ucfirst($participante['modalidad']),
-        '{{periodo_evento}}' => formatearFecha($participante['fecha_inicio']) . ' al ' . formatearFecha($participante['fecha_fin']),
-        
-        // DATOS INSTITUCIONALES
-        '{{firma_digital}}' => 'Certificado Digital Verificado',
-        '{{sello_institucional}}' => 'Universidad Distrital Francisco José de Caldas',
-        '{{departamento}}' => 'Sistema de Gestión de Proyectos y Oficina de Extensión (SGPOE)'
-    ];
+function extraerDimensionesSVG($contenido_svg) {
+    $ancho = 1200;
+    $alto = 850;
     
-    // Reemplazar variables en la plantilla
-    $contenido_procesado = $contenido_plantilla;
-    foreach ($variables as $variable => $valor) {
-        // Usar htmlspecialchars para caracteres XML seguros
-        $valor_seguro = htmlspecialchars($valor, ENT_XML1 | ENT_COMPAT, 'UTF-8');
-        $contenido_procesado = str_replace($variable, $valor_seguro, $contenido_procesado);
+    if (preg_match('/width=["\']([^"\']+)["\']/', $contenido_svg, $matches)) {
+        $ancho = intval($matches[1]);
     }
     
-    // Limpiar variables no utilizadas (opcional)
-    $contenido_procesado = preg_replace('/\{\{[^}]+\}\}/', '', $contenido_procesado);
-    
-    // Asegurar que el SVG tiene la declaración XML correcta
-    if (strpos($contenido_procesado, '<?xml') === false) {
-        $contenido_procesado = '<?xml version="1.0" encoding="UTF-8"?>' . "\n" . $contenido_procesado;
+    if (preg_match('/height=["\']([^"\']+)["\']/', $contenido_svg, $matches)) {
+        $alto = intval($matches[1]);
     }
     
-    return $contenido_procesado;
-}
-
-function generarPDFBasico($participante, $codigo_verificacion) {
-    // Fallback PDF básico cuando no hay plantilla SVG
-    $nombre_completo = strtoupper($participante['nombres'] . ' ' . $participante['apellidos']);
-    $fecha_inicio = formatearFecha($participante['fecha_inicio']);
-    $fecha_fin = formatearFecha($participante['fecha_fin']);
-    $fecha_actual = date('d/m/Y');
+    if (preg_match('/viewBox=["\']([^"\']+)["\']/', $contenido_svg, $matches)) {
+        $viewBox = explode(' ', $matches[1]);
+        if (count($viewBox) >= 4) {
+            $ancho = intval($viewBox[2]);
+            $alto = intval($viewBox[3]);
+        }
+    }
     
-    // Contenido del certificado en texto plano
-    $contenido_certificado = "CERTIFICADO DE PARTICIPACIÓN
-
-UNIVERSIDAD DISTRITAL FRANCISCO JOSÉ DE CALDAS
-SISTEMA DE GESTIÓN DE PROYECTOS Y OFICINA DE EXTENSIÓN (SGPOE)
-
-Se certifica que:
-
-$nombre_completo
-Documento de Identidad: {$participante['numero_identificacion']}
-
-Participó exitosamente en el evento:
-
-{$participante['evento_nombre']}
-
-Realizado del $fecha_inicio al $fecha_fin
-Modalidad: " . ucfirst($participante['modalidad']) . "
-Lugar: " . ($participante['lugar'] ?: 'Virtual') . "
-Entidad Organizadora: {$participante['entidad_organizadora']}
-Duración: " . ($participante['horas_duracion'] ? $participante['horas_duracion'] . ' horas académicas' : 'No especificada') . "
-
-En calidad de: {$participante['rol']}
-
-Expedido en Bogotá D.C., a los $fecha_actual
-
-Código de Verificación: $codigo_verificacion
-Consulte la autenticidad en: " . PUBLIC_URL . "verificar.php
-
-Este es un certificado digital generado automáticamente.
-Para verificar su autenticidad, ingrese el código de verificación en nuestro sitio web.
-
----
-SGPOE - Universidad Distrital Francisco José de Caldas
-" . date('Y');
-
-    return $contenido_certificado;
-}
-
-// Función auxiliar para obtener nombre del mes
-function obtenerNombreMes($numero_mes) {
-    $meses = [
-        1 => 'Enero', 2 => 'Febrero', 3 => 'Marzo', 4 => 'Abril',
-        5 => 'Mayo', 6 => 'Junio', 7 => 'Julio', 8 => 'Agosto',
-        9 => 'Septiembre', 10 => 'Octubre', 11 => 'Noviembre', 12 => 'Diciembre'
-    ];
-    return $meses[$numero_mes] ?? 'Mes';
-}
-
-// Función auxiliar para formatear fechas
-function formatearFecha($fecha) {
-    return date('d/m/Y', strtotime($fecha));
+    return ['ancho' => $ancho, 'alto' => $alto];
 }
 ?>
