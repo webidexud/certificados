@@ -1,56 +1,50 @@
 <?php
+// admin/certificados/generar.php - VERSIÓN MASIVA FINAL
 require_once '../../config/config.php';
 require_once '../../includes/funciones.php';
+require_once '../../includes/funciones_svg.php';
 
 verificarAutenticacion();
 
-// Manejar mensajes de la sesión
-$mensaje = null;
-if (isset($_SESSION['success_mensaje'])) {
-    $mensaje = ['tipo' => 'success', 'texto' => $_SESSION['success_mensaje']];
-    unset($_SESSION['success_mensaje']);
-} elseif (isset($_SESSION['error_mensaje'])) {
-    $mensaje = ['tipo' => 'error', 'texto' => $_SESSION['error_mensaje']];
-    unset($_SESSION['error_mensaje']);
-}
-
 $error = '';
-$participantes = [];
-$eventos = [];
-$evento_seleccionado = null;
+$success = '';
 $estadisticas = [];
+$eventos = [];
+$participantes = [];
+$evento_seleccionado = null;
 
+// Obtener lista de eventos
 try {
     $db = Database::getInstance()->getConnection();
-    
-    // Obtener eventos para el selector
-    $stmt = $db->query("SELECT id, nombre, fecha_inicio, fecha_fin, estado FROM eventos ORDER BY fecha_inicio DESC");
+    $stmt = $db->prepare("SELECT * FROM eventos ORDER BY fecha_inicio DESC");
+    $stmt->execute();
     $eventos = $stmt->fetchAll();
-    
 } catch (Exception $e) {
     $error = "Error al cargar eventos: " . $e->getMessage();
 }
 
-// Si hay un evento seleccionado, cargar participantes y estadísticas
-if (isset($_GET['evento_id']) && is_numeric($_GET['evento_id'])) {
-    $evento_id = (int)$_GET['evento_id'];
-    
+// Obtener evento seleccionado
+$evento_id = isset($_GET['evento_id']) ? intval($_GET['evento_id']) : 0;
+
+if ($evento_id > 0) {
     try {
-        // Obtener información del evento
         $stmt = $db->prepare("SELECT * FROM eventos WHERE id = ?");
         $stmt->execute([$evento_id]);
         $evento_seleccionado = $stmt->fetch();
         
         if ($evento_seleccionado) {
-            // Obtener participantes con información de certificados
+            // Obtener participantes del evento con todos los datos necesarios
             $stmt = $db->prepare("
                 SELECT p.*, 
                        e.nombre as evento_nombre,
+                       e.fecha_inicio, e.fecha_fin, e.entidad_organizadora, 
+                       e.modalidad, e.lugar, e.horas_duracion, e.descripcion,
                        c.id as certificado_id,
                        c.codigo_verificacion,
                        c.fecha_generacion,
                        c.tipo_archivo,
-                       c.estado as certificado_estado
+                       c.estado as certificado_estado,
+                       (SELECT COUNT(*) FROM certificados c2 WHERE c2.participante_id = p.id) as tiene_certificado
                 FROM participantes p
                 JOIN eventos e ON p.evento_id = e.id
                 LEFT JOIN certificados c ON p.id = c.participante_id
@@ -95,48 +89,307 @@ if (isset($_GET['evento_id']) && is_numeric($_GET['evento_id'])) {
     }
 }
 
-// Procesar acciones masivas
+// PROCESAR ACCIONES MASIVAS - USANDO EL MISMO ALGORITMO
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
     $accion = $_POST['accion'];
     $participantes_seleccionados = $_POST['participantes'] ?? [];
-    $evento_id = $_POST['evento_id'] ?? null;
+    $evento_id_post = $_POST['evento_id'] ?? null;
     
-    if (empty($participantes_seleccionados) || !$evento_id) {
-        $_SESSION['error_mensaje'] = 'Debe seleccionar al menos un participante';
+    if (empty($participantes_seleccionados) || !$evento_id_post) {
+        $error = 'Debe seleccionar al menos un participante';
     } else {
         try {
             if ($accion === 'generar_certificados') {
                 $generados = 0;
                 $errores = 0;
+                $mensajes_error = [];
                 
                 foreach ($participantes_seleccionados as $participante_id) {
-                    // Aquí iría la lógica de generación individual
-                    // Por ahora simulamos el resultado
-                    $generados++;
+                    try {
+                        // USAR EXACTAMENTE LA MISMA LÓGICA DEL ARCHIVO INDIVIDUAL
+                        
+                        // Obtener datos completos del participante - MISMA CONSULTA
+                        $stmt = $db->prepare("
+                            SELECT p.*, e.nombre as evento_nombre, e.fecha_inicio, e.fecha_fin,
+                                   e.entidad_organizadora, e.modalidad, e.lugar, e.horas_duracion, e.descripcion,
+                                   (SELECT COUNT(*) FROM certificados c WHERE c.participante_id = p.id) as tiene_certificado
+                            FROM participantes p 
+                            JOIN eventos e ON p.evento_id = e.id 
+                            WHERE p.id = ?
+                        ");
+                        $stmt->execute([$participante_id]);
+                        $participante = $stmt->fetch();
+                        
+                        if (!$participante) {
+                            $errores++;
+                            $mensajes_error[] = "Participante ID $participante_id no encontrado";
+                            continue;
+                        }
+                        
+                        // Verificar si ya tiene certificado - MISMA VALIDACIÓN
+                        if ($participante['tiene_certificado'] > 0) {
+                            $errores++;
+                            $mensajes_error[] = $participante['nombres'] . ' ' . $participante['apellidos'] . ' ya tiene certificado';
+                            continue;
+                        }
+                        
+                        // BUSCAR PLANTILLA PARA EL ROL DEL PARTICIPANTE - MISMA CONSULTA
+                        $stmt = $db->prepare("
+                            SELECT * FROM plantillas_certificados 
+                            WHERE evento_id = ? AND (rol = ? OR rol = 'General') 
+                            ORDER BY CASE WHEN rol = ? THEN 1 ELSE 2 END 
+                            LIMIT 1
+                        ");
+                        $stmt->execute([$participante['evento_id'], $participante['rol'], $participante['rol']]);
+                        $plantilla = $stmt->fetch();
+                        
+                        if (!$plantilla) {
+                            $errores++;
+                            $mensajes_error[] = 'No hay plantilla configurada para el rol "' . $participante['rol'] . '" en este evento';
+                            continue;
+                        }
+                        
+                        // Verificar que el archivo de plantilla existe - MISMA VALIDACIÓN
+                        $ruta_plantilla = TEMPLATE_PATH . $plantilla['archivo_plantilla'];
+                        if (!file_exists($ruta_plantilla)) {
+                            $errores++;
+                            $mensajes_error[] = 'El archivo de plantilla no existe para ' . $participante['nombres'] . ' ' . $participante['apellidos'];
+                            continue;
+                        }
+                        
+                        // GENERAR CERTIFICADO CON LA PLANTILLA - MISMA FUNCIÓN
+                        $resultado = generarCertificadoConPlantilla($participante, $plantilla);
+                        
+                        if ($resultado['success']) {
+                            $generados++;
+                        } else {
+                            $errores++;
+                            $mensajes_error[] = $participante['nombres'] . ' ' . $participante['apellidos'] . ': ' . $resultado['error'];
+                        }
+                        
+                    } catch (Exception $e) {
+                        $errores++;
+                        $mensajes_error[] = "Error con participante ID $participante_id: " . $e->getMessage();
+                    }
                 }
                 
-                $_SESSION['success_mensaje'] = "Se generaron $generados certificados exitosamente";
+                // Construir mensaje de resultado
+                $mensaje_final = '';
+                if ($generados > 0) {
+                    $mensaje_final = "Se generaron $generados certificados exitosamente";
+                }
                 if ($errores > 0) {
-                    $_SESSION['error_mensaje'] = "Hubo $errores errores durante la generación";
+                    if ($mensaje_final) $mensaje_final .= ". ";
+                    $mensaje_final .= "Hubo $errores errores";
+                    if (!empty($mensajes_error)) {
+                        $mensaje_final .= ": " . implode('; ', array_slice($mensajes_error, 0, 3));
+                        if (count($mensajes_error) > 3) {
+                            $mensaje_final .= " y " . (count($mensajes_error) - 3) . " errores más";
+                        }
+                    }
+                }
+                
+                if ($generados > 0) {
+                    $success = $mensaje_final;
+                } else {
+                    $error = $mensaje_final ?: 'No se pudieron generar certificados';
                 }
                 
             } elseif ($accion === 'eliminar_certificados') {
+                // Eliminar certificados
                 $placeholders = str_repeat('?,', count($participantes_seleccionados) - 1) . '?';
                 $stmt = $db->prepare("DELETE FROM certificados WHERE participante_id IN ($placeholders)");
                 $stmt->execute($participantes_seleccionados);
                 $eliminados = $stmt->rowCount();
                 
-                $_SESSION['success_mensaje'] = "Se eliminaron $eliminados certificados exitosamente";
+                if ($eliminados > 0) {
+                    $success = "Se eliminaron $eliminados certificados exitosamente";
+                } else {
+                    $error = "No se encontraron certificados para eliminar";
+                }
             }
             
-            // Recargar página para mostrar cambios
-            header("Location: " . $_SERVER['REQUEST_URI']);
-            exit;
-            
         } catch (Exception $e) {
-            $_SESSION['error_mensaje'] = 'Error al procesar la acción: ' . $e->getMessage();
+            $error = 'Error al procesar la acción: ' . $e->getMessage();
         }
     }
+    
+    // Recargar página para mostrar cambios
+    $redirect_url = $_SERVER['REQUEST_URI'];
+    if ($success) {
+        $_SESSION['success_mensaje'] = $success;
+    }
+    if ($error) {
+        $_SESSION['error_mensaje'] = $error;
+    }
+    
+    header("Location: $redirect_url");
+    exit;
+}
+
+// Mostrar mensajes de sesión
+if (isset($_SESSION['success_mensaje'])) {
+    $success = $_SESSION['success_mensaje'];
+    unset($_SESSION['success_mensaje']);
+}
+if (isset($_SESSION['error_mensaje'])) {
+    $error = $_SESSION['error_mensaje'];
+    unset($_SESSION['error_mensaje']);
+}
+
+// COPIAR EXACTAMENTE LA FUNCIÓN DEL ARCHIVO INDIVIDUAL
+function generarCertificadoConPlantilla($participante, $plantilla) {
+    try {
+        $db = Database::getInstance()->getConnection();
+        
+        // Generar código único
+        $codigo_verificacion = generarCodigoUnico();
+        
+        // Leer contenido de la plantilla SVG
+        $ruta_plantilla = TEMPLATE_PATH . $plantilla['archivo_plantilla'];
+        $contenido_svg = file_get_contents($ruta_plantilla);
+        
+        if ($contenido_svg === false) {
+            throw new Exception("No se pudo leer la plantilla SVG");
+        }
+        
+        // Preparar datos para reemplazar en la plantilla
+        $datos_certificado = [
+            '{{nombres}}' => $participante['nombres'],
+            '{{apellidos}}' => $participante['apellidos'],
+            '{{numero_identificacion}}' => $participante['numero_identificacion'],
+            '{{correo_electronico}}' => $participante['correo_electronico'],
+            '{{rol}}' => $participante['rol'],
+            '{{telefono}}' => $participante['telefono'] ?: '',
+            '{{institucion}}' => $participante['institucion'] ?: '',
+            
+            // Datos del evento
+            '{{evento_nombre}}' => $participante['evento_nombre'],
+            '{{fecha_inicio}}' => formatearFecha($participante['fecha_inicio']),
+            '{{fecha_fin}}' => formatearFecha($participante['fecha_fin']),
+            '{{entidad_organizadora}}' => $participante['entidad_organizadora'],
+            '{{modalidad}}' => ucfirst($participante['modalidad']),
+            '{{lugar}}' => $participante['lugar'] ?: 'Virtual',
+            '{{horas_duracion}}' => $participante['horas_duracion'] ?: '0',
+            
+            // Datos del certificado
+            '{{codigo_verificacion}}' => $codigo_verificacion,
+            '{{fecha_generacion}}' => date('d/m/Y H:i'),
+            '{{fecha_emision}}' => date('d/m/Y'),
+            '{{año}}' => date('Y'),
+            '{{mes}}' => date('m'),
+            '{{dia}}' => date('d'),
+            
+            // URLs y enlaces
+            '{{url_verificacion}}' => PUBLIC_URL . 'verificar.php?codigo=' . $codigo_verificacion,
+            '{{numero_certificado}}' => 'CERT-' . date('Y') . '-' . str_pad($participante['id'], 6, '0', STR_PAD_LEFT),
+            
+            // Extras
+            '{{nombre_completo}}' => $participante['nombres'] . ' ' . $participante['apellidos'],
+            '{{iniciales}}' => strtoupper(substr($participante['nombres'], 0, 1) . substr($participante['apellidos'], 0, 1)),
+            '{{duracion_texto}}' => ($participante['horas_duracion'] ? $participante['horas_duracion'] . ' horas académicas' : 'Duración no especificada'),
+            '{{modalidad_completa}}' => 'Modalidad ' . ucfirst($participante['modalidad']),
+        ];
+        
+        // Procesar el SVG con manejo de texto largo
+        $svg_procesado = procesarTextoSVG($contenido_svg, $datos_certificado);
+        
+        // Procesar nombres largos específicamente
+        $svg_procesado = procesarNombresLargos($svg_procesado, $participante['nombres'], $participante['apellidos']);
+        
+        // Procesar eventos largos
+        $svg_procesado = procesarEventosLargos($svg_procesado, $participante['evento_nombre']);
+        
+        // Optimizar SVG para mejor renderizado
+        $svg_procesado = optimizarSVGTexto($svg_procesado);
+        
+        // Generar nombre de archivo
+        $nombre_archivo = $codigo_verificacion . '_' . time() . '.svg';
+        $ruta_completa = GENERATED_PATH . 'certificados/' . $nombre_archivo;
+        
+        // Asegurar que el directorio existe
+        if (!is_dir(GENERATED_PATH . 'certificados/')) {
+            mkdir(GENERATED_PATH . 'certificados/', 0755, true);
+        }
+        
+        // Guardar SVG procesado
+        if (file_put_contents($ruta_completa, $svg_procesado) === false) {
+            throw new Exception("No se pudo escribir el archivo SVG");
+        }
+        
+        // Generar hash de validación
+        $hash_validacion = hash('sha256', $participante['id'] . $participante['numero_identificacion'] . $codigo_verificacion . date('Y-m-d'));
+        
+        // Extraer dimensiones del SVG
+        $dimensiones = extraerDimensionesSVG($svg_procesado);
+        
+        // Insertar en base de datos
+        $stmt = $db->prepare("
+            INSERT INTO certificados (participante_id, evento_id, codigo_verificacion, archivo_pdf, hash_validacion, tipo_archivo, dimensiones, fecha_generacion)
+            VALUES (?, ?, ?, ?, ?, 'svg', ?, NOW())
+        ");
+        
+        $resultado_bd = $stmt->execute([
+            $participante['id'],
+            $participante['evento_id'],
+            $codigo_verificacion,
+            $nombre_archivo,
+            $hash_validacion,
+            json_encode($dimensiones)
+        ]);
+        
+        if (!$resultado_bd) {
+            throw new Exception("Error al insertar en base de datos");
+        }
+        
+        // Registrar auditoría
+        registrarAuditoria('GENERAR_CERTIFICADO_SVG', 'certificados', $db->lastInsertId(), null, [
+            'participante_id' => $participante['id'],
+            'codigo_verificacion' => $codigo_verificacion,
+            'tipo_archivo' => 'svg',
+            'plantilla_usada' => $plantilla['nombre_plantilla'],
+            'rol' => $participante['rol']
+        ]);
+        
+        return [
+            'success' => true,
+            'codigo_verificacion' => $codigo_verificacion,
+            'tipo' => 'svg',
+            'archivo' => $nombre_archivo,
+            'plantilla' => $plantilla['nombre_plantilla']
+        ];
+        
+    } catch (Exception $e) {
+        error_log("Error generando certificado SVG: " . $e->getMessage());
+        return [
+            'success' => false,
+            'error' => $e->getMessage()
+        ];
+    }
+}
+
+// COPIAR EXACTAMENTE LA FUNCIÓN DEL ARCHIVO INDIVIDUAL
+function extraerDimensionesSVG($contenido_svg) {
+    $ancho = 1200;
+    $alto = 850;
+    
+    if (preg_match('/width=["\']([^"\']+)["\']/', $contenido_svg, $matches)) {
+        $ancho = intval($matches[1]);
+    }
+    
+    if (preg_match('/height=["\']([^"\']+)["\']/', $contenido_svg, $matches)) {
+        $alto = intval($matches[1]);
+    }
+    
+    if (preg_match('/viewBox=["\']([^"\']+)["\']/', $contenido_svg, $matches)) {
+        $viewBox = explode(' ', $matches[1]);
+        if (count($viewBox) >= 4) {
+            $ancho = intval($viewBox[2]);
+            $alto = intval($viewBox[3]);
+        }
+    }
+    
+    return ['ancho' => $ancho, 'alto' => $alto];
 }
 ?>
 <!DOCTYPE html>
@@ -144,668 +397,244 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gestión de Certificados - Sistema de Certificados</title>
+    <title>Generar Certificados</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f8f9fa;
-            color: #333;
-            line-height: 1.5;
-        }
-        
-        .header {
-            background: #fff;
-            border-bottom: 1px solid #e1e5e9;
-            padding: 1rem 0;
-        }
-        
-        .header-content {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 1rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .header h1 {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: #2d3748;
-        }
-        
-        .user-info {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            font-size: 0.9rem;
-            color: #718096;
-        }
-        
-        .logout {
-            color: #e53e3e;
-            text-decoration: none;
-            padding: 0.5rem 1rem;
-            border: 1px solid #e53e3e;
-            border-radius: 4px;
-            transition: all 0.2s;
-        }
-        
-        .logout:hover {
-            background: #e53e3e;
-            color: white;
-        }
-        
-        .nav {
-            background: #fff;
-            border-bottom: 1px solid #e1e5e9;
-            padding: 0.5rem 0;
-        }
-        
-        .nav-content {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 1rem;
-        }
-        
-        .nav ul {
-            list-style: none;
-            display: flex;
-            gap: 2rem;
-        }
-        
-        .nav a {
-            color: #718096;
-            text-decoration: none;
-            padding: 0.5rem 0;
-            border-bottom: 2px solid transparent;
-            transition: all 0.2s;
-        }
-        
-        .nav a:hover,
-        .nav a.active {
-            color: #2d3748;
-            border-bottom-color: #4299e1;
-        }
-        
-        .container {
-            max-width: 1200px;
-            margin: 2rem auto;
-            padding: 0 1rem;
-        }
-        
-        .page-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 2rem;
-        }
-        
-        .page-header h2 {
-            font-size: 1.8rem;
-            font-weight: 600;
-            color: #2d3748;
-        }
-        
-        .btn {
-            display: inline-block;
-            padding: 0.75rem 1rem;
-            text-decoration: none;
-            border-radius: 4px;
-            font-weight: 500;
-            font-size: 0.9rem;
-            transition: all 0.2s;
-            border: none;
-            cursor: pointer;
-        }
-        
-        .btn-primary {
-            background: #4299e1;
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background: #3182ce;
-        }
-        
-        .btn-success {
-            background: #38a169;
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background: #2f855a;
-        }
-        
-        .btn-danger {
-            background: #e53e3e;
-            color: white;
-        }
-        
-        .btn-danger:hover {
-            background: #c53030;
-        }
-        
-        .alert {
-            padding: 1rem;
-            border-radius: 4px;
-            margin-bottom: 1rem;
-            border-left: 4px solid;
-        }
-        
-        .alert-success {
-            background: #f0fff4;
-            color: #22543d;
-            border-left-color: #38a169;
-        }
-        
-        .alert-error {
-            background: #fed7d7;
-            color: #742a2a;
-            border-left-color: #e53e3e;
-        }
-        
-        .event-selector {
-            background: white;
-            padding: 1.5rem;
-            border-radius: 6px;
-            margin-bottom: 1.5rem;
-            border: 1px solid #e1e5e9;
-        }
-        
-        .event-selector h3 {
-            margin-bottom: 1rem;
-            color: #2d3748;
-            font-size: 1.1rem;
-        }
-        
-        .form-group {
-            margin-bottom: 1rem;
-        }
-        
-        .form-group label {
-            display: block;
-            margin-bottom: 0.5rem;
-            font-weight: 500;
-            color: #4a5568;
-            font-size: 0.9rem;
-        }
-        
-        .form-group select,
-        .form-group input {
-            width: 100%;
-            padding: 0.75rem;
-            border: 1px solid #d1d5db;
-            border-radius: 4px;
-            font-size: 0.9rem;
-        }
-        
-        .form-group select:focus,
-        .form-group input:focus {
-            outline: none;
-            border-color: #4299e1;
-            box-shadow: 0 0 0 2px rgba(66, 153, 225, 0.1);
-        }
-        
-        .stats-container {
-            background: white;
-            padding: 1.5rem;
-            border-radius: 6px;
-            margin-bottom: 1.5rem;
-            border: 1px solid #e1e5e9;
-        }
-        
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-bottom: 1.5rem;
-        }
-        
-        .stat-card {
-            background: #4299e1;
-            color: white;
-            padding: 1.5rem;
-            border-radius: 6px;
-            text-align: center;
-        }
-        
-        .stat-number {
-            font-size: 2rem;
-            font-weight: bold;
-            margin-bottom: 0.5rem;
-        }
-        
-        .stat-label {
-            font-size: 0.9rem;
-            opacity: 0.9;
-        }
-        
-        .role-stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 1rem;
-        }
-        
-        .role-card {
-            background: #f7fafc;
-            padding: 1rem;
-            border-radius: 4px;
-            border-left: 4px solid #4299e1;
-        }
-        
-        .role-name {
-            font-weight: 600;
-            color: #2d3748;
-            margin-bottom: 0.5rem;
-        }
-        
-        .role-progress {
-            display: flex;
-            justify-content: space-between;
-            font-size: 0.85rem;
-            color: #718096;
-        }
-        
-        .mass-controls {
-            background: white;
-            padding: 1.5rem;
-            border-radius: 6px;
-            margin-bottom: 1.5rem;
-            border: 1px solid #e1e5e9;
-        }
-        
-        .controls-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1rem;
-            flex-wrap: wrap;
-            gap: 1rem;
-        }
-        
-        .selection-controls {
-            display: flex;
-            gap: 0.5rem;
-            flex-wrap: wrap;
-        }
-        
-        .btn-sm {
-            padding: 0.5rem 0.75rem;
-            font-size: 0.8rem;
-        }
-        
-        .table-container {
-            background: white;
-            border-radius: 6px;
-            border: 1px solid #e1e5e9;
-            overflow: hidden;
-        }
-        
-        .table-header {
-            padding: 1rem 1.5rem;
-            background: #f7fafc;
-            border-bottom: 1px solid #e1e5e9;
-        }
-        
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        
-        th {
-            background: #f7fafc;
-            padding: 1rem;
-            text-align: left;
-            font-weight: 600;
-            color: #4a5568;
-            font-size: 0.85rem;
-            border-bottom: 1px solid #e1e5e9;
-        }
-        
-        td {
-            padding: 1rem;
-            border-bottom: 1px solid #f1f3f4;
-        }
-        
-        tr:hover {
-            background: #f7fafc;
-        }
-        
-        .participant-name {
-            font-weight: 500;
-            color: #2d3748;
-        }
-        
-        .participant-email {
-            font-size: 0.85rem;
-            color: #718096;
-            margin-top: 0.25rem;
-        }
-        
-        .badge {
-            display: inline-block;
-            padding: 0.25rem 0.5rem;
-            border-radius: 3px;
-            font-size: 0.75rem;
-            font-weight: 500;
-        }
-        
-        .badge-success {
-            background: #c6f6d5;
-            color: #22543d;
-        }
-        
-        .badge-pending {
-            background: #fed7d7;
-            color: #742a2a;
-        }
-        
-        .badge-role {
-            background: #e2e8f0;
-            color: #4a5568;
-        }
-        
-        .checkbox-container {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        input[type="checkbox"] {
-            width: auto;
-            margin: 0;
-            transform: scale(1.2);
-            cursor: pointer;
-        }
-        
-        .empty-state {
-            text-align: center;
-            padding: 3rem;
-            color: #718096;
-        }
-        
-        .empty-state h3 {
-            margin-bottom: 0.5rem;
-            color: #4a5568;
-        }
-        
-        .counter-text {
-            margin-top: 1rem;
-            font-weight: 600;
-            color: #4299e1;
-        }
-        
-        @media (max-width: 768px) {
-            .header-content {
-                flex-direction: column;
-                gap: 1rem;
-            }
-            
-            .nav ul {
-                flex-wrap: wrap;
-                gap: 1rem;
-            }
-            
-            .page-header {
-                flex-direction: column;
-                gap: 1rem;
-                text-align: center;
-            }
-            
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .selection-controls {
-                flex-direction: column;
-            }
-            
-            .controls-header {
-                flex-direction: column;
-            }
-            
-            table {
-                font-size: 0.85rem;
-            }
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f4; color: #333; line-height: 1.6; }
+        .container { max-width: 1400px; margin: 0 auto; background: white; min-height: 100vh; }
+        .header { background: #2c3e50; color: white; padding: 20px 30px; border-bottom: 3px solid #3498db; }
+        .header h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+        .breadcrumb { background: #ecf0f1; padding: 12px 30px; border-bottom: 1px solid #ddd; font-size: 14px; }
+        .breadcrumb a { color: #3498db; text-decoration: none; margin-right: 8px; }
+        .main-content { padding: 30px; }
+        .form-group { margin-bottom: 20px; }
+        .form-group label { display: block; margin-bottom: 8px; font-weight: 500; color: #2c3e50; }
+        .form-control { width: 100%; max-width: 400px; padding: 12px; border: 2px solid #ddd; border-radius: 6px; font-size: 14px; transition: all 0.3s; }
+        .form-control:focus { outline: none; border-color: #3498db; box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1); }
+        .btn { display: inline-block; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.3s; margin-right: 10px; margin-bottom: 10px; }
+        .btn-primary { background: #3498db; color: white; }
+        .btn-primary:hover { background: #2980b9; }
+        .btn-success { background: #27ae60; color: white; }
+        .btn-success:hover { background: #219a52; }
+        .btn-danger { background: #e74c3c; color: white; }
+        .btn-danger:hover { background: #c0392b; }
+        .btn-sm { padding: 8px 16px; font-size: 12px; }
+        .alert { padding: 15px; margin-bottom: 20px; border-radius: 6px; border-left: 4px solid; }
+        .alert-success { background-color: #d4edda; border-color: #27ae60; color: #155724; }
+        .alert-error { background-color: #f8d7da; border-color: #e74c3c; color: #721c24; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .stat-card { background: white; border: 2px solid #ecf0f1; border-radius: 8px; padding: 20px; text-align: center; }
+        .stat-number { font-size: 2.5em; font-weight: bold; color: #3498db; margin-bottom: 5px; }
+        .stat-label { color: #666; font-size: 14px; }
+        .controls-section { background: #f8f9fa; border: 2px solid #ecf0f1; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+        .selection-controls { margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd; }
+        .quick-select-buttons { margin-bottom: 15px; }
+        .table-responsive { overflow-x: auto; margin-top: 20px; }
+        .participants-table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .participants-table th { background: #2c3e50; color: white; padding: 15px 12px; text-align: left; font-weight: 500; font-size: 14px; }
+        .participants-table td { padding: 12px; border-bottom: 1px solid #ecf0f1; font-size: 14px; }
+        .participants-table tr:hover { background-color: #f8f9fa; }
+        .badge { padding: 4px 8px; border-radius: 12px; font-size: 11px; font-weight: 500; text-transform: uppercase; }
+        .badge-success { background: #d4edda; color: #155724; }
+        .badge-pending { background: #fff3cd; color: #856404; }
+        .badge-role { background: #cce4ff; color: #0066cc; }
+        .checkbox-cell { width: 40px; text-align: center; }
+        .participant-checkbox { width: 18px; height: 18px; cursor: pointer; }
+        .empty-state { text-align: center; padding: 60px 20px; color: #666; }
+        .empty-state h3 { margin-bottom: 10px; color: #2c3e50; }
+        #contadorSeleccionados { font-weight: bold; margin-left: 10px; }
     </style>
 </head>
 <body>
-    <header class="header">
-        <div class="header-content">
-            <h1>Sistema de Certificados</h1>
-            <div class="user-info">
-                <span><?php echo htmlspecialchars($_SESSION['nombre']); ?></span>
-                <a href="../logout.php" class="logout">Salir</a>
-            </div>
-        </div>
-    </header>
-    
-    <nav class="nav">
-        <div class="nav-content">
-            <ul>
-                <li><a href="../index.php">Dashboard</a></li>
-                <li><a href="../eventos/listar.php">Eventos</a></li>
-                <li><a href="../participantes/listar.php">Participantes</a></li>
-                <li><a href="generar.php" class="active">Certificados</a></li>
-            </ul>
-        </div>
-    </nav>
-    
     <div class="container">
-        <div class="page-header">
-            <h2>Gestión de Certificados</h2>
+        <div class="header">
+            <h1>🎓 Generar Certificados</h1>
+            <p>Genere certificados masivamente usando las plantillas SVG configuradas</p>
         </div>
         
-        <?php if ($mensaje): ?>
-            <div class="alert alert-<?php echo $mensaje['tipo']; ?>">
-                <?php echo htmlspecialchars($mensaje['texto']); ?>
-            </div>
-        <?php endif; ?>
+        <div class="breadcrumb">
+            <a href="../index.php">Inicio</a> &gt; 
+            <a href="../certificados/">Certificados</a> &gt; 
+            <span>Generar</span>
+        </div>
         
-        <?php if ($error): ?>
-            <div class="alert alert-error">
-                <?php echo htmlspecialchars($error); ?>
-            </div>
-        <?php endif; ?>
-        
-        <!-- Selector de Evento -->
-        <div class="event-selector">
-            <h3>Seleccionar Evento</h3>
-            <form method="GET">
-                <div class="form-group">
-                    <label for="evento_id">Evento</label>
-                    <select id="evento_id" name="evento_id" onchange="this.form.submit()">
-                        <option value="">Seleccione un evento...</option>
+        <div class="main-content">
+            <!-- Mensajes -->
+            <?php if ($success): ?>
+                <div class="alert alert-success">
+                    ✅ <?php echo htmlspecialchars($success); ?>
+                </div>
+            <?php endif; ?>
+            
+            <?php if ($error): ?>
+                <div class="alert alert-error">
+                    ❌ <?php echo htmlspecialchars($error); ?>
+                </div>
+            <?php endif; ?>
+            
+            <!-- Selector de evento -->
+            <div class="form-group">
+                <label for="evento_selector">Seleccionar Evento:</label>
+                <form method="GET" style="display: inline;">
+                    <select name="evento_id" id="evento_selector" class="form-control" onchange="this.form.submit()">
+                        <option value="">-- Seleccione un evento --</option>
                         <?php foreach ($eventos as $evento): ?>
                             <option value="<?php echo $evento['id']; ?>" 
-                                    <?php echo (isset($_GET['evento_id']) && $_GET['evento_id'] == $evento['id']) ? 'selected' : ''; ?>>
+                                    <?php echo ($evento_id == $evento['id']) ? 'selected' : ''; ?>>
                                 <?php echo htmlspecialchars($evento['nombre']); ?> 
-                                (<?php echo date('d/m/Y', strtotime($evento['fecha_inicio'])); ?> - <?php echo date('d/m/Y', strtotime($evento['fecha_fin'])); ?>)
+                                (<?php echo date('d/m/Y', strtotime($evento['fecha_inicio'])); ?>)
                             </option>
                         <?php endforeach; ?>
                     </select>
-                </div>
-            </form>
-        </div>
-        
-        <?php if ($evento_seleccionado && !empty($participantes)): ?>
-            <!-- Estadísticas del Evento -->
-            <div class="stats-container">
-                <h3>Estadísticas del Evento</h3>
+                </form>
+            </div>
+            
+            <?php if ($evento_seleccionado && !empty($participantes)): ?>
+                <!-- Estadísticas -->
                 <div class="stats-grid">
                     <div class="stat-card">
                         <div class="stat-number"><?php echo $estadisticas['total_participantes']; ?></div>
                         <div class="stat-label">Total Participantes</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-number"><?php echo $estadisticas['con_certificado']; ?></div>
+                        <div class="stat-number" style="color: #27ae60;"><?php echo $estadisticas['con_certificado']; ?></div>
                         <div class="stat-label">Con Certificado</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-number"><?php echo $estadisticas['sin_certificado']; ?></div>
+                        <div class="stat-number" style="color: #e74c3c;"><?php echo $estadisticas['sin_certificado']; ?></div>
                         <div class="stat-label">Sin Certificado</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-number"><?php echo $estadisticas['porcentaje_completado']; ?>%</div>
+                        <div class="stat-number" style="color: #f39c12;"><?php echo $estadisticas['porcentaje_completado']; ?>%</div>
                         <div class="stat-label">Progreso</div>
                     </div>
                 </div>
                 
-                <?php if (!empty($estadisticas['por_rol'])): ?>
-                    <h4 style="margin-bottom: 1rem; color: #2d3748;">Estadísticas por Rol</h4>
-                    <div class="role-stats">
-                        <?php foreach ($estadisticas['por_rol'] as $rol => $datos): ?>
-                            <div class="role-card">
-                                <div class="role-name"><?php echo htmlspecialchars($rol); ?></div>
-                                <div class="role-progress">
-                                    <span>Total: <?php echo $datos['total']; ?></span>
-                                    <span>Con certificado: <?php echo $datos['con_certificado']; ?></span>
-                                    <span>Pendientes: <?php echo $datos['sin_certificado']; ?></span>
-                                </div>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                <?php endif; ?>
-            </div>
-            
-            <!-- Controles Masivos -->
-            <div class="mass-controls">
-                <div class="controls-header">
-                    <h3>Acciones Masivas</h3>
-                    <div class="selection-controls">
-                        <button type="button" class="btn btn-sm btn-primary" onclick="seleccionarTodos()">
-                            Seleccionar Todos
-                        </button>
-                        <button type="button" class="btn btn-sm btn-primary" onclick="deseleccionarTodos()">
-                            Deseleccionar Todos
-                        </button>
-                        <button type="button" class="btn btn-sm btn-primary" onclick="seleccionarSinCertificado()">
-                            Solo Sin Certificado
-                        </button>
-                        <button type="button" class="btn btn-sm btn-primary" onclick="seleccionarConCertificado()">
-                            Solo Con Certificado
-                        </button>
-                    </div>
-                </div>
-                
-                <form method="POST" id="formAccionMasiva">
+                <!-- FORMULARIO ÚNICO CON TODO INCLUIDO -->
+                <form method="POST" id="formAccionMasiva" action="">
                     <input type="hidden" name="evento_id" value="<?php echo $evento_seleccionado['id']; ?>">
-                    <div class="selection-controls">
-                        <button type="submit" name="accion" value="generar_certificados" class="btn btn-success" 
-                                onclick="return confirmarAccion('generar')">
-                            Generar Certificados Seleccionados
-                        </button>
-                        <button type="submit" name="accion" value="eliminar_certificados" class="btn btn-danger" 
-                                onclick="return confirmarAccion('eliminar')">
-                            Eliminar Certificados Seleccionados
-                        </button>
+                    
+                    <!-- Controles de selección y acciones -->
+                    <div class="controls-section">
+                        <h3>Acciones Masivas</h3>
+                        <div class="quick-select-buttons">
+                            <button type="button" class="btn btn-sm btn-primary" onclick="seleccionarTodos()">
+                                Seleccionar Todos
+                            </button>
+                            <button type="button" class="btn btn-sm btn-primary" onclick="deseleccionarTodos()">
+                                Deseleccionar Todos
+                            </button>
+                            <button type="button" class="btn btn-sm btn-primary" onclick="seleccionarSinCertificado()">
+                                Solo Sin Certificado
+                            </button>
+                            <button type="button" class="btn btn-sm btn-primary" onclick="seleccionarConCertificado()">
+                                Solo Con Certificado
+                            </button>
+                        </div>
+                        
+                        <div>
+                            <span id="contadorSeleccionados">0 participantes seleccionados</span>
+                        </div>
+                        
+                        <div class="selection-controls">
+                            <button type="submit" name="accion" value="generar_certificados" class="btn btn-success" 
+                                    onclick="return confirmarAccion('generar')">
+                                🎓 Generar Certificados Seleccionados
+                            </button>
+                            <button type="submit" name="accion" value="eliminar_certificados" class="btn btn-danger" 
+                                    onclick="return confirmarAccion('eliminar')">
+                                🗑️ Eliminar Certificados Seleccionados
+                            </button>
+                        </div>
                     </div>
-                    <div id="contadorSeleccionados" class="counter-text">
-                        0 participantes seleccionados
+                    
+                    <!-- Tabla de participantes DENTRO del formulario -->
+                    <div class="table-responsive">
+                        <table class="participants-table">
+                            <thead>
+                                <tr>
+                                    <th class="checkbox-cell">
+                                        <input type="checkbox" id="selectAll" onchange="toggleAll(this)">
+                                    </th>
+                                    <th>Participante</th>
+                                    <th>Identificación</th>
+                                    <th>Rol</th>
+                                    <th>Estado</th>
+                                    <th>Código Verificación</th>
+                                    <th>Fecha Generación</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($participantes as $participante): ?>
+                                    <tr>
+                                        <td class="checkbox-cell">
+                                            <input type="checkbox" 
+                                                   name="participantes[]" 
+                                                   value="<?php echo $participante['id']; ?>"
+                                                   class="participante-checkbox"
+                                                   data-tiene-certificado="<?php echo $participante['certificado_id'] ? 'true' : 'false'; ?>"
+                                                   onchange="actualizarContador()">
+                                        </td>
+                                        <td>
+                                            <div style="font-weight: 500;">
+                                                <?php echo htmlspecialchars($participante['nombres'] . ' ' . $participante['apellidos']); ?>
+                                            </div>
+                                            <div style="font-size: 12px; color: #666;">
+                                                <?php echo htmlspecialchars($participante['correo_electronico']); ?>
+                                            </div>
+                                        </td>
+                                        <td><?php echo htmlspecialchars($participante['numero_identificacion']); ?></td>
+                                        <td>
+                                            <span class="badge badge-role">
+                                                <?php echo htmlspecialchars($participante['rol']); ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <?php if ($participante['certificado_id']): ?>
+                                                <span class="badge badge-success">✅ Generado</span>
+                                            <?php else: ?>
+                                                <span class="badge badge-pending">⏳ Pendiente</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td>
+                                            <?php if ($participante['codigo_verificacion']): ?>
+                                                <code style="background: #f7fafc; padding: 0.25rem 0.5rem; border-radius: 3px; font-size: 0.8rem;">
+                                                    <?php echo htmlspecialchars($participante['codigo_verificacion']); ?>
+                                                </code>
+                                            <?php else: ?>
+                                                <span style="color: #999;">-</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td>
+                                            <?php if ($participante['fecha_generacion']): ?>
+                                                <?php echo date('d/m/Y H:i', strtotime($participante['fecha_generacion'])); ?>
+                                            <?php else: ?>
+                                                <span style="color: #999;">-</span>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
                     </div>
                 </form>
-            </div>
-            
-            <!-- Tabla de Participantes -->
-            <div class="table-container">
-                <div class="table-header">
-                    <h3>Participantes del Evento</h3>
+                
+            <?php elseif ($evento_seleccionado && empty($participantes)): ?>
+                <div class="empty-state">
+                    <h3>No hay participantes en este evento</h3>
+                    <p>Para generar certificados, primero debe cargar los participantes del evento.</p>
+                    <a href="../participantes/cargar.php?evento_id=<?php echo $evento_seleccionado['id']; ?>" class="btn btn-primary">
+                        📥 Cargar Participantes
+                    </a>
                 </div>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>
-                                <input type="checkbox" id="selectAll" onchange="toggleAll(this)">
-                            </th>
-                            <th>Participante</th>
-                            <th>Identificación</th>
-                            <th>Rol</th>
-                            <th>Estado del Certificado</th>
-                            <th>Fecha Generación</th>
-                            <th>Código Verificación</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($participantes as $participante): ?>
-                            <tr>
-                                <td class="checkbox-container">
-                                    <input type="checkbox" 
-                                           name="participantes[]" 
-                                           value="<?php echo $participante['id']; ?>"
-                                           data-tiene-certificado="<?php echo $participante['certificado_id'] ? 'true' : 'false'; ?>"
-                                           class="participante-checkbox"
-                                           onchange="actualizarContador()">
-                                </td>
-                                <td>
-                                    <div class="participant-name">
-                                        <?php echo htmlspecialchars($participante['nombres'] . ' ' . $participante['apellidos']); ?>
-                                    </div>
-                                    <?php if ($participante['correo_electronico']): ?>
-                                        <div class="participant-email">
-                                            <?php echo htmlspecialchars($participante['correo_electronico']); ?>
-                                        </div>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <?php echo htmlspecialchars($participante['numero_identificacion']); ?>
-                                </td>
-                                <td>
-                                    <span class="badge badge-role">
-                                        <?php echo htmlspecialchars($participante['rol']); ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <?php if ($participante['certificado_id']): ?>
-                                        <span class="badge badge-success">Generado</span>
-                                    <?php else: ?>
-                                        <span class="badge badge-pending">Pendiente</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <?php if ($participante['fecha_generacion']): ?>
-                                        <?php echo date('d/m/Y H:i', strtotime($participante['fecha_generacion'])); ?>
-                                    <?php else: ?>
-                                        <span style="color: #999;">-</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <?php if ($participante['codigo_verificacion']): ?>
-                                        <code style="background: #f7fafc; padding: 0.25rem 0.5rem; border-radius: 3px; font-size: 0.8rem;">
-                                            <?php echo htmlspecialchars($participante['codigo_verificacion']); ?>
-                                        </code>
-                                    <?php else: ?>
-                                        <span style="color: #999;">-</span>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-            
-        <?php elseif ($evento_seleccionado && empty($participantes)): ?>
-            <div class="empty-state">
-                <h3>No hay participantes en este evento</h3>
-                <p>Para generar certificados, primero debe cargar los participantes del evento.</p>
-                <a href="../participantes/cargar.php?evento_id=<?php echo $evento_seleccionado['id']; ?>" class="btn btn-primary">
-                    Cargar Participantes
-                </a>
-            </div>
-            
-        <?php elseif (!$evento_seleccionado): ?>
-            <div class="empty-state">
-                <h3>Seleccione un evento</h3>
-                <p>Para comenzar la gestión de certificados, seleccione un evento de la lista desplegable.</p>
-            </div>
-        <?php endif; ?>
+                
+            <?php elseif (!$evento_seleccionado): ?>
+                <div class="empty-state">
+                    <h3>Seleccione un evento</h3>
+                    <p>Para comenzar la gestión de certificados, seleccione un evento de la lista desplegable.</p>
+                </div>
+            <?php endif; ?>
+        </div>
     </div>
     
     <script>
@@ -902,7 +731,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
             actualizarContador();
             
             // Auto-ocultar mensajes después de 5 segundos
-            const alerts = document.querySelectorAll('.alert-success');
+            const alerts = document.querySelectorAll('.alert-success, .alert-error');
             alerts.forEach(alert => {
                 setTimeout(() => {
                     alert.style.transition = 'opacity 0.3s';
@@ -915,13 +744,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
             const form = document.getElementById('formAccionMasiva');
             if (form) {
                 form.addEventListener('submit', function(e) {
-                    const action = e.submitter.value;
+                    const action = e.submitter ? e.submitter.value : '';
                     const boton = e.submitter;
                     
+                    // Validar que hay participantes seleccionados
+                    const checkboxes = document.querySelectorAll('.participante-checkbox:checked');
+                    if (checkboxes.length === 0) {
+                        alert('Debe seleccionar al menos un participante.');
+                        e.preventDefault();
+                        return false;
+                    }
+                    
                     if (action === 'generar_certificados') {
-                        mostrarLoading(boton, 'Generando certificados');
+                        mostrarLoading(boton, '🎓 Generando certificados');
                     } else if (action === 'eliminar_certificados') {
-                        mostrarLoading(boton, 'Eliminando certificados');
+                        mostrarLoading(boton, '🗑️ Eliminando certificados');
                     }
                 });
             }
