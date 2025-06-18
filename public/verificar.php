@@ -1,43 +1,38 @@
 <?php
-// public/verificar.php
+// public/verificar.php - MODIFICADO CON BOTÓN DE IMPRIMIR
 require_once '../config/config.php';
 require_once '../includes/funciones.php';
 
+$busqueda_realizada = false;
 $certificado = null;
 $error = '';
 $codigo_busqueda = '';
-$busqueda_realizada = false; // ← AGREGAR ESTA LÍNEA
 
-// Si viene el código por URL (desde consulta.php)
-if (isset($_GET['codigo'])) {
-    $codigo_busqueda = limpiarDatos($_GET['codigo']);
-}
-
-if ($_POST || $codigo_busqueda) {
-    $codigo_verificacion = $codigo_busqueda ?: limpiarDatos($_POST['codigo_verificacion']);
-    $busqueda_realizada = true; // ← AGREGAR ESTA LÍNEA
+// Procesar búsqueda
+if ($_GET || $_POST) {
+    $codigo_busqueda = isset($_GET['codigo']) ? limpiarDatos($_GET['codigo']) : 
+                      (isset($_POST['codigo_verificacion']) ? limpiarDatos($_POST['codigo_verificacion']) : '');
     
-    if (empty($codigo_verificacion)) {
-        $error = 'Por favor, ingrese el código de verificación';
-    } else {
+    if (!empty($codigo_busqueda)) {
+        $busqueda_realizada = true;
+        
         try {
             $db = Database::getInstance()->getConnection();
             
             $stmt = $db->prepare("
                 SELECT 
-                    c.*,
-                    p.nombres,
+                    c.*, 
+                    p.nombres, 
                     p.apellidos,
                     p.numero_identificacion,
-                    p.correo_electronico,
                     p.rol,
                     p.telefono,
                     p.institucion,
                     e.nombre as evento_nombre,
                     e.fecha_inicio,
                     e.fecha_fin,
-                    e.entidad_organizadora,
                     e.modalidad,
+                    e.entidad_organizadora,
                     e.lugar,
                     e.horas_duracion
                 FROM certificados c
@@ -46,23 +41,27 @@ if ($_POST || $codigo_busqueda) {
                 WHERE c.codigo_verificacion = ?
             ");
             
-            $stmt->execute([$codigo_verificacion]);
+            $stmt->execute([$codigo_busqueda]);
             $certificado = $stmt->fetch();
             
             if ($certificado) {
-                // Registrar verificación en auditoría
+                // Registrar auditoría de verificación
                 registrarAuditoria('VERIFICACION', 'certificados', $certificado['id'], null, [
-                    'codigo_verificacion' => $codigo_verificacion,
-                    'ip_consultante' => $_SERVER['REMOTE_ADDR'] ?? 'Desconocida'
+                    'codigo_verificacion' => $codigo_busqueda,
+                    'ip_consulta' => $_SERVER['REMOTE_ADDR'] ?? 'Desconocida'
                 ]);
             }
             
         } catch (Exception $e) {
-            $error = 'Error al verificar el certificado. Intente nuevamente.';
+            $error = 'Error al verificar el certificado: ' . $e->getMessage();
         }
     }
 }
+
+// Determinar si el código fue pasado por URL
+$codigo_verificacion = isset($_GET['codigo']) ? $_GET['codigo'] : '';
 ?>
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -70,279 +69,169 @@ if ($_POST || $codigo_busqueda) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Verificar Certificado - Sistema de Certificados</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            color: #333;
-            line-height: 1.6;
+            padding: 20px;
         }
-        
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 2rem 1rem;
-        }
-        
+        .container { max-width: 800px; margin: 0 auto; }
         .header {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 2rem;
+            border-radius: 20px 20px 0 0;
             text-align: center;
-            color: white;
-            margin-bottom: 2rem;
+            backdrop-filter: blur(10px);
         }
-        
-        .header h1 {
-            font-size: 2.5rem;
-            margin-bottom: 0.5rem;
-            font-weight: 700;
-        }
-        
-        .header p {
-            font-size: 1.1rem;
-            opacity: 0.9;
-        }
-        
-        .verification-card {
+        .header h1 { color: #333; margin-bottom: 0.5rem; font-size: 2.5rem; font-weight: 700; }
+        .header p { color: #666; font-size: 1.1rem; }
+        .search-container {
             background: white;
             padding: 2rem;
-            border-radius: 15px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
         }
-        
-        .verification-form {
-            display: flex;
-            gap: 1rem;
-            align-items: end;
-        }
-        
-        .form-group {
-            flex: 1;
-        }
-        
-        .form-group label {
-            display: block;
-            margin-bottom: 0.5rem;
-            font-weight: 600;
-            color: #333;
-        }
-        
+        .search-form { display: flex; gap: 1rem; align-items: end; }
+        .form-group { flex: 1; }
+        .form-group label { display: block; margin-bottom: 0.5rem; font-weight: 600; color: #333; }
         .form-group input {
             width: 100%;
             padding: 1rem;
-            border: 2px solid #e1e5e9;
-            border-radius: 8px;
+            border: 2px solid #e2e8f0;
+            border-radius: 10px;
             font-size: 1rem;
-            transition: border-color 0.3s;
+            transition: all 0.3s;
         }
-        
-        .form-group input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        
+        .form-group input:focus { border-color: #667eea; outline: none; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1); }
         .btn-verify {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
             padding: 1rem 2rem;
-            border-radius: 8px;
-            font-size: 1rem;
-            font-weight: 600;
+            border-radius: 10px;
             cursor: pointer;
-            transition: transform 0.2s;
+            font-weight: 600;
+            transition: all 0.3s;
+            white-space: nowrap;
         }
-        
-        .btn-verify:hover {
-            transform: translateY(-2px);
-        }
-        
-        .alert {
-            padding: 1rem;
-            border-radius: 8px;
-            margin-bottom: 1rem;
-            border-left: 4px solid;
-        }
-        
-        .alert-error {
-            background: #fed7d7;
-            color: #742a2a;
-            border-left-color: #e53e3e;
-        }
-        
-        .alert-success {
-            background: #d4edda;
-            color: #155724;
-            border-left-color: #28a745;
-        }
-        
+        .btn-verify:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3); }
+        .alert { padding: 1rem; margin-bottom: 1rem; border-radius: 10px; }
+        .alert-error { background: #fee; border: 1px solid #fcc; color: #c33; }
         .certificate-result {
             background: white;
-            padding: 2rem;
-            border-radius: 15px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
+            border-radius: 0 0 20px 20px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
         }
-        
         .result-header {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+            color: white;
+            padding: 2rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 2rem;
-            padding-bottom: 1rem;
-            border-bottom: 1px solid #e1e5e9;
         }
-        
-        .result-title h2 {
-            color: #2d3748;
-            margin-bottom: 0.5rem;
-        }
-        
-        .result-title p {
-            color: #718096;
-            font-size: 0.9rem;
-        }
-        
-        .result-status {
-            text-align: right;
-        }
-        
+        .result-title h2 { font-size: 2rem; margin-bottom: 0.5rem; }
+        .result-title p { opacity: 0.9; }
         .status-badge {
-            padding: 0.5rem 1rem;
-            border-radius: 20px;
-            font-size: 0.9rem;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 0.75rem 1.5rem;
+            border-radius: 50px;
             font-weight: 600;
-        }
-        
-        .status-valid {
-            background: #d4edda;
-            color: #155724;
-        }
-        
-        .status-invalid {
-            background: #f8d7da;
-            color: #721c24;
-        }
-        
-        .certificate-info {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 2rem;
-        }
-        
-        .info-section h3 {
-            color: #2d3748;
-            margin-bottom: 1rem;
-            font-size: 1.1rem;
-            border-bottom: 2px solid #667eea;
-            padding-bottom: 0.5rem;
-        }
-        
-        .info-item {
-            margin-bottom: 1rem;
-        }
-        
-        .info-label {
-            font-weight: 600;
-            color: #4a5568;
-            font-size: 0.9rem;
-            margin-bottom: 0.25rem;
-        }
-        
-        .info-value {
-            color: #2d3748;
-            font-size: 1rem;
-        }
-        
-        .download-section {
-            text-align: center;
-            margin-top: 2rem;
-            padding-top: 2rem;
-            border-top: 1px solid #e1e5e9;
-        }
-        
-        .btn-download {
-            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-            color: white;
-            text-decoration: none;
-            padding: 1rem 2rem;
-            border-radius: 8px;
-            font-weight: 600;
-            display: inline-block;
-            transition: transform 0.2s;
-        }
-        
-        .btn-download:hover {
-            transform: translateY(-2px);
-        }
-        
-        .verification-code {
-            font-family: 'Courier New', monospace;
-            font-size: 0.8rem;
-            word-break: break-all;
-            background: #f5f5f5;
-            padding: 0.5rem;
-            border-radius: 4px;
-            margin-top: 0.5rem;
-        }
-        
-        .back-home {
-            text-align: center;
-            margin-top: 2rem;
-        }
-        
-        .back-home a {
-            color: white;
-            text-decoration: none;
-            opacity: 0.9;
-            transition: opacity 0.3s;
-        }
-        
-        .back-home a:hover {
-            opacity: 1;
-        }
-        
-        .info-banner {
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 10px;
-            padding: 1rem;
-            margin-bottom: 2rem;
-            color: white;
             backdrop-filter: blur(10px);
         }
-        
-        .info-banner h4 {
-            margin-bottom: 0.5rem;
+        .status-valid { background: rgba(255, 255, 255, 0.2); }
+        .status-invalid { background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); }
+        .certificate-info { padding: 2rem; }
+        .info-section { margin-bottom: 1.5rem; }
+        .info-section h3 { 
+            color: #333; 
+            margin-bottom: 0.75rem; 
+            font-size: 1.1rem; 
+            border-bottom: 1px solid #e2e8f0; 
+            padding-bottom: 0.5rem; 
+        }
+        .info-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .info-list li {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .info-list li:last-child {
+            border-bottom: none;
+        }
+        .info-label { 
+            font-size: 0.9rem; 
+            font-weight: 500; 
+            color: #64748b; 
+            min-width: 120px;
+        }
+        .info-value { 
+            font-size: 0.95rem; 
+            color: #1e293b; 
+            font-weight: 500;
+            text-align: right;
+            flex: 1;
+            margin-left: 1rem;
+        }
+        .verification-code { font-family: 'Courier New', monospace; background: #e2e8f0; padding: 0.75rem; border-radius: 5px; font-size: 1.1rem; font-weight: bold; color: #333; }
+        .actions-section {
+            background: #f8f9fa;
+            padding: 1.5rem;
+            border-radius: 10px;
+            text-align: center;
+            margin-top: 1.5rem;
+            border-top: 1px solid #e2e8f0;
         }
         
-        .info-banner p {
-            font-size: 0.9rem;
-            opacity: 0.9;
+        /* ESTILOS PARA EL BOTÓN */
+        .btn-print {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s;
+            border: none;
+            cursor: pointer;
+            font-size: 0.95rem;
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+            color: white;
+        }
+        .btn-print:hover { 
+            transform: translateY(-1px); 
+            box-shadow: 0 4px 12px rgba(72, 187, 120, 0.3); 
         }
         
+        .no-results {
+            background: white;
+            border-radius: 0 0 20px 20px;
+            padding: 3rem;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+        .no-results-icon { font-size: 5rem; margin-bottom: 1rem; }
+        .back-home { text-align: center; margin-top: 2rem; }
+        .back-home a { color: white; text-decoration: none; font-weight: 600; opacity: 0.8; transition: opacity 0.3s; }
+        .back-home a:hover { opacity: 1; }
         @media (max-width: 768px) {
-            .header h1 {
-                font-size: 2rem;
-            }
-            
-            .verification-form {
+            .search-form { flex-direction: column; }
+            .result-header { flex-direction: column; text-align: center; gap: 1rem; }
+            .info-list li {
                 flex-direction: column;
-                gap: 1rem;
+                align-items: flex-start;
+                gap: 0.25rem;
             }
-            
-            .result-header {
-                flex-direction: column;
-                text-align: center;
-            }
-            
-            .certificate-info {
-                grid-template-columns: 1fr;
+            .info-value {
+                text-align: left;
+                margin-left: 0;
             }
         }
     </style>
@@ -350,24 +239,19 @@ if ($_POST || $codigo_busqueda) {
 <body>
     <div class="container">
         <div class="header">
-            <h1>✓ Verificar Certificado</h1>
-            <p>Confirme la autenticidad de un certificado ingresando su código de verificación</p>
+            <h1>🔍 Verificar Certificado</h1>
+            <p>Ingrese el código de verificación para validar la autenticidad del certificado</p>
         </div>
         
-        <div class="info-banner">
-            <h4>🔐 Verificación Segura</h4>
-            <p>Cada certificado cuenta con un código único que permite verificar su autenticidad y validez. Este sistema garantiza que el certificado no ha sido alterado y fue emitido oficialmente.</p>
-        </div>
-        
-        <div class="verification-card">
-            <form method="POST" class="verification-form">
+        <div class="search-container">
+            <form method="POST" class="search-form">
                 <div class="form-group">
                     <label for="codigo_verificacion">Código de Verificación</label>
                     <input 
                         type="text" 
                         id="codigo_verificacion" 
-                        name="codigo_verificacion" 
-                        value="<?php echo $codigo_busqueda ? htmlspecialchars($codigo_busqueda) : (isset($codigo_verificacion) ? htmlspecialchars($codigo_verificacion) : ''); ?>"
+                        name="codigo_verificacion"
+                        value="<?php echo $busqueda_realizada ? htmlspecialchars($codigo_busqueda) : (isset($codigo_verificacion) ? htmlspecialchars($codigo_verificacion) : ''); ?>"
                         placeholder="Ej: ABC123XYZ456"
                         required
                         maxlength="20"
@@ -398,77 +282,98 @@ if ($_POST || $codigo_busqueda) {
                 <div class="certificate-info">
                     <div class="info-section">
                         <h3>👤 Información del Participante</h3>
-                        <div class="info-item">
-                            <div class="info-label">Nombre Completo</div>
-                            <div class="info-value"><?php echo htmlspecialchars($certificado['nombres'] . ' ' . $certificado['apellidos']); ?></div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Documento de Identidad</div>
-                            <div class="info-value"><?php echo htmlspecialchars($certificado['numero_identificacion']); ?></div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Rol en el Evento</div>
-                            <div class="info-value"><?php echo htmlspecialchars($certificado['rol']); ?></div>
-                        </div>
-                        <?php if ($certificado['correo_electronico']): ?>
-                        <div class="info-item">
-                            <div class="info-label">Correo Electrónico</div>
-                            <div class="info-value"><?php echo htmlspecialchars($certificado['correo_electronico']); ?></div>
-                        </div>
-                        <?php endif; ?>
+                        <ul class="info-list">
+                            <li>
+                                <span class="info-label">Nombre Completo</span>
+                                <span class="info-value"><?php echo htmlspecialchars($certificado['nombres'] . ' ' . $certificado['apellidos']); ?></span>
+                            </li>
+                            <li>
+                                <span class="info-label">Documento</span>
+                                <span class="info-value"><?php echo htmlspecialchars($certificado['numero_identificacion']); ?></span>
+                            </li>
+                            <li>
+                                <span class="info-label">Rol</span>
+                                <span class="info-value"><?php echo htmlspecialchars(ucfirst($certificado['rol'])); ?></span>
+                            </li>
+                            <?php if ($certificado['institucion']): ?>
+                            <li>
+                                <span class="info-label">Institución</span>
+                                <span class="info-value"><?php echo htmlspecialchars($certificado['institucion']); ?></span>
+                            </li>
+                            <?php endif; ?>
+                        </ul>
                     </div>
                     
                     <div class="info-section">
-                        <h3>📅 Información del Evento</h3>
-                        <div class="info-item">
-                            <div class="info-label">Nombre del Evento</div>
-                            <div class="info-value"><?php echo htmlspecialchars($certificado['evento_nombre']); ?></div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Entidad Organizadora</div>
-                            <div class="info-value"><?php echo htmlspecialchars($certificado['entidad_organizadora']); ?></div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Fechas</div>
-                            <div class="info-value">
-                                <?php echo formatearFecha($certificado['fecha_inicio']); ?> al 
-                                <?php echo formatearFecha($certificado['fecha_fin']); ?>
-                            </div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Modalidad</div>
-                            <div class="info-value"><?php echo ucfirst($certificado['modalidad']); ?></div>
-                        </div>
-                        <?php if ($certificado['lugar']): ?>
-                        <div class="info-item">
-                            <div class="info-label">Lugar</div>
-                            <div class="info-value"><?php echo htmlspecialchars($certificado['lugar']); ?></div>
-                        </div>
-                        <?php endif; ?>
-                        <?php if ($certificado['horas_duracion']): ?>
-                        <div class="info-item">
-                            <div class="info-label">Duración</div>
-                            <div class="info-value"><?php echo $certificado['horas_duracion']; ?> horas académicas</div>
-                        </div>
-                        <?php endif; ?>
+                        <h3>🎓 Información del Evento</h3>
+                        <ul class="info-list">
+                            <li>
+                                <span class="info-label">Evento</span>
+                                <span class="info-value"><?php echo htmlspecialchars($certificado['evento_nombre']); ?></span>
+                            </li>
+                            <li>
+                                <span class="info-label">Fechas</span>
+                                <span class="info-value"><?php echo formatearFecha($certificado['fecha_inicio']) . ' al ' . formatearFecha($certificado['fecha_fin']); ?></span>
+                            </li>
+                            <li>
+                                <span class="info-label">Modalidad</span>
+                                <span class="info-value"><?php echo htmlspecialchars(ucfirst($certificado['modalidad'])); ?></span>
+                            </li>
+                            <li>
+                                <span class="info-label">Duración</span>
+                                <span class="info-value"><?php echo $certificado['horas_duracion'] ? $certificado['horas_duracion'] . ' horas' : 'No especificada'; ?></span>
+                            </li>
+                            <li>
+                                <span class="info-label">Organiza</span>
+                                <span class="info-value"><?php echo htmlspecialchars($certificado['entidad_organizadora']); ?></span>
+                            </li>
+                            <?php if ($certificado['lugar']): ?>
+                            <li>
+                                <span class="info-label">Lugar</span>
+                                <span class="info-value"><?php echo htmlspecialchars($certificado['lugar']); ?></span>
+                            </li>
+                            <?php endif; ?>
+                        </ul>
+                    </div>
+                    
+                    <div class="info-section">
+                        <h3>📄 Información del Certificado</h3>
+                        <ul class="info-list">
+                            <li>
+                                <span class="info-label">Generado</span>
+                                <span class="info-value"><?php echo date('d/m/Y H:i', strtotime($certificado['fecha_generacion'])); ?></span>
+                            </li>
+                            <li>
+                                <span class="info-label">Tipo</span>
+                                <span class="info-value"><?php echo strtoupper($certificado['tipo_archivo'] ?: 'PDF'); ?></span>
+                            </li>
+                            <li>
+                                <span class="info-label">Descargas</span>
+                                <span class="info-value"><?php echo $certificado['descargas'] ?: 0; ?> vez(es)</span>
+                            </li>
+                        </ul>
                     </div>
                 </div>
-                
-                <div class="download-section">
-                    <h4>📄 Descargar Certificado</h4>
-                    <p style="margin-bottom: 1rem; color: #666;">Descargue una copia oficial del certificado verificado</p>
-                    <a href="descargar.php?codigo=<?php echo urlencode($certificado['codigo_verificacion']); ?>" 
-                       class="btn-download">
-                        📥 Descargar Certificado
-                    </a>
+            
+                <div class="actions-section">
+                    <?php 
+                    // Detectar si es imprimible (SVG o HTML)
+                    $es_imprimible = (isset($certificado['tipo_archivo']) && in_array($certificado['tipo_archivo'], ['svg', 'html'])) || 
+                                   (strpos($certificado['archivo_pdf'], '.svg') !== false) || 
+                                   (strpos($certificado['archivo_pdf'], '.html') !== false);
+                    ?>
                     
-                    <div class="info-item" style="margin-top: 1.5rem;">
-                        <div class="info-label">Código de Verificación</div>
-                        <div class="verification-code"><?php echo htmlspecialchars($certificado['codigo_verificacion']); ?></div>
+                    <?php if ($es_imprimible): ?>
+                        <button onclick="imprimirCertificado('<?php echo urlencode($certificado['codigo_verificacion']); ?>')" 
+                                class="btn-print">
+                            🖨️ Imprimir Certificado
+                        </button>
+                    <?php endif; ?>
+                    
+                    <div class="info-item" style="margin-top: 1rem; display: inline-block; background: white; padding: 0.75rem 1rem; border-radius: 5px;">
+                        <div class="info-label" style="margin-bottom: 0.25rem;">Código de Verificación</div>
+                        <div class="verification-code" style="font-size: 0.9rem; background: #e2e8f0; padding: 0.5rem; border-radius: 3px;"><?php echo htmlspecialchars($certificado['codigo_verificacion']); ?></div>
                     </div>
-                    <p style="font-size: 0.85rem; color: #666; margin-top: 0.5rem;">
-                        Generado el <?php echo date('d/m/Y H:i', strtotime($certificado['fecha_generacion'])); ?>
-                    </p>
                 </div>
             </div>
         <?php elseif ($busqueda_realizada && !$certificado): ?>
@@ -483,15 +388,16 @@ if ($_POST || $codigo_busqueda) {
                     </div>
                 </div>
                 
-                <div style="text-align: center; padding: 2rem; color: #666;">
-                    <h3>No se encontró el certificado</h3>
-                    <p>El código de verificación <strong><?php echo htmlspecialchars($codigo_verificacion); ?></strong> no corresponde a ningún certificado válido.</p>
-                    <div style="margin-top: 1rem; font-size: 0.9rem;">
+                <div class="no-results">
+                    <div class="no-results-icon">📋</div>
+                    <h3>Código No Válido</h3>
+                    <p>El código de verificación <strong><?php echo htmlspecialchars($codigo_busqueda); ?></strong> no existe en nuestro sistema</p>
+                    <div style="color: #666; font-size: 0.9rem; margin-top: 1rem;">
                         <p><strong>Posibles causas:</strong></p>
                         <ul style="list-style: none; margin-top: 0.5rem;">
-                            <li>• El código fue ingresado incorrectamente</li>
-                            <li>• El certificado ha sido revocado o eliminado</li>
-                            <li>• El código no pertenece a este sistema</li>
+                            <li>• El código fue escrito incorrectamente</li>
+                            <li>• El certificado ha sido eliminado del sistema</li>
+                            <li>• El código ha expirado o no es válido</li>
                         </ul>
                     </div>
                 </div>
@@ -504,16 +410,65 @@ if ($_POST || $codigo_busqueda) {
     </div>
     
     <script>
-        // Formatear código mientras se escribe (solo letras y números)
+        // Formatear código de verificación mientras se escribe
         document.getElementById('codigo_verificacion').addEventListener('input', function(e) {
-            let valor = e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+            let valor = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
             e.target.value = valor;
         });
         
-        // Enfocar automáticamente el campo de código
+        // Enfocar automáticamente el campo si no hay código en la URL
         window.addEventListener('load', function() {
-            document.getElementById('codigo_verificacion').focus();
+            if (!document.getElementById('codigo_verificacion').value) {
+                document.getElementById('codigo_verificacion').focus();
+            }
         });
+        
+        // FUNCIÓN PARA IMPRIMIR CERTIFICADO (IGUAL QUE EN CONSULTA.PHP)
+        function imprimirCertificado(codigoVerificacion) {
+            // Crear URL para obtener el contenido del certificado
+            const urlCertificado = `ver_certificado.php?codigo=${codigoVerificacion}`;
+            
+            // Crear ventana nueva para impresión
+            const ventana = window.open('', '_blank', 'width=1200,height=900');
+            
+            // Crear contenido HTML para impresión
+            ventana.document.write(`
+                <html>
+                <head>
+                    <title>Certificado - ${codigoVerificacion}</title>
+                    <style>
+                        body { 
+                            margin: 0; 
+                            padding: 20px; 
+                            background: white; 
+                            font-family: Arial, sans-serif;
+                        }
+                        .loading {
+                            text-align: center;
+                            padding: 50px;
+                            font-size: 18px;
+                            color: #666;
+                        }
+                        iframe {
+                            width: 100%;
+                            height: 600px;
+                            border: none;
+                        }
+                        @media print {
+                            body { margin: 0; padding: 0; }
+                            .loading { display: none; }
+                            iframe { height: 100vh; }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="loading">Cargando certificado...</div>
+                    <iframe src="${urlCertificado}" onload="this.style.display='block'; document.querySelector('.loading').style.display='none'; setTimeout(() => window.print(), 1000);"></iframe>
+                </body>
+                </html>
+            `);
+            ventana.document.close();
+        }
     </script>
 </body>
 </html>
