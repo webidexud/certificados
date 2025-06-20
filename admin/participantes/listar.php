@@ -149,7 +149,82 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
             border-radius: 4px;
             transition: all 0.2s;
         }
-        
+        .actions-bar {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.actions-left h2 {
+    color: #333;
+    margin: 0;
+    font-size: 1.5rem;
+}
+
+.actions-right {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.btn {
+    padding: 0.75rem 1.5rem;
+    border: none;
+    border-radius: 5px;
+    font-size: 0.95rem;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: all 0.3s;
+    font-weight: 500;
+}
+
+.btn-success {
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    color: white;
+}
+
+.btn-success:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(40, 167, 69, 0.3);
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+}
+
+@media (max-width: 768px) {
+    .actions-bar {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    .actions-right {
+        width: 100%;
+        justify-content: center;
+    }
+    
+    .btn {
+        flex: 1;
+        justify-content: center;
+        min-width: 150px;
+    }
+}
         .logout:hover {
             background: #e53e3e;
             color: white;
@@ -467,10 +542,19 @@ if (isset($_GET['eliminar']) && $_SESSION['rol'] === 'admin') {
     </nav>
     
     <div class="container">
-        <div class="page-header">
-            <h2>Participantes</h2>
-            <a href="cargar.php" class="btn btn-primary">Cargar participantes</a>
+            <div class="actions-bar">
+        <div class="actions-left">
+            <h2>👥 Gestión de Participantes</h2>
         </div>
+        <div class="actions-right">
+            <a href="agregar.php" class="btn btn-success">
+                ➕ Agregar Participante Individual
+            </a>
+            <a href="cargar.php" class="btn btn-primary">
+                📤 Carga Masiva
+            </a>
+        </div>
+    </div>
         
         <?php if ($mensaje): ?>
             <div class="alert alert-<?php echo $mensaje['tipo']; ?>">
