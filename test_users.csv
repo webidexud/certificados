@@ -1,0 +1,11 @@
+﻿nombres;apellidos;numero_identificacion;correo_electronico;rol;telefono;institucion
+Juan Carlos;Pérez García;12345678;juan.perez@email.com;Participante;3001234567;Universidad Nacional
+María Elena;Rodriguez López;87654321;maria.rodriguez@email.com;Ponente;3009876543;Instituto Tecnológico
+Ana Sofía;Martínez Ruiz;11223344;ana.martinez@email.com;Participante;3012345678;SENA
+Carlos Eduardo;González Vargas;44556677;carlos.gonzalez@email.com;Organizador;3023456789;Ministerio de Educación
+Laura Patricia;Sánchez Torres;99887766;laura.sanchez@email.com;Participante;3034567890;Universidad Javeriana
+Roberto;Morales Castro;55443322;roberto.morales@email.com;Coordinador;3045678901;Universidad de los Andes
+Isabella;Franco Delgado;77889900;isabella.franco@email.com;Participante;3056789012;Universidad del Rosario
+Diego Alejandro;Herrera Jiménez;22334455;diego.herrera@email.com;Ponente;3067890123;Universidad Central
+Valentina;Castro Mendoza;66778899;valentina.castro@email.com;Participante;3078901234;Politécnico Grancolombiano
+Andrés Felipe;Ramírez Silva;88990011;andres.ramirez@email.com;Asistente;3089012345;IDEXUD
