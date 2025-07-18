@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg text-rendering="geometricPrecision" shape-rendering="geometricPrecision" width="1920" height="1080" viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Gradientes principales -->
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a2980;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#26d0ce;stop-opacity:1" />
+    </linearGradient>
+    
+    <linearGradient id="cardGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.97" />
+      <stop offset="100%" style="stop-color:#f8f9ff;stop-opacity:0.97" />
+    </linearGradient>
+    
+    <linearGradient id="titleGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1a2980;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#26d0ce;stop-opacity:1" />
+    </linearGradient>
+    
+    <linearGradient id="accentGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#FF512F;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#F09819;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Filtros y efectos -->
+    <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="20" flood-color="#000" flood-opacity="0.2"/>
+    </filter>
+    
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    
+    <!-- Patrones decorativos -->
+    <pattern id="dotPattern" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse">
+      <circle cx="20" cy="20" r="2" fill="#1a2980" opacity="0.1"/>
+    </pattern>
+    
+    <pattern id="circlePattern" x="0" y="0" width="100" height="100" patternUnits="userSpaceOnUse">
+      <circle cx="50" cy="50" r="30" fill="none" stroke="#1a2980" stroke-width="1" opacity="0.07"/>
+    </pattern>
+    
+    <!-- Marcas de agua y diseños decorativos -->
+    <mask id="certificateMask">
+      <rect width="1920" height="1080" fill="white"/>
+      <text x="960" y="540" text-anchor="middle" font-family="Arial, sans-serif" font-size="300" 
+            fill="black" opacity="0.05" transform="rotate(-30, 960, 540)">CERTIFICADO</text>
+    </mask>
+  </defs>
+  
+  <!-- Fondo principal -->
+  <rect width="1920" height="1080" fill="url(#bgGradient)"/>
+  
+  <!-- Patrones decorativos de fondo -->
+  <rect width="1920" height="1080" fill="url(#dotPattern)" opacity="0.6"/>
+  <rect width="1920" height="1080" fill="url(#circlePattern)" opacity="0.5"/>
+  
+  <!-- Marco decorativo exterior -->
+  <rect x="60" y="60" width="1800" height="960" rx="20" ry="20" 
+        fill="none" stroke="white" stroke-width="4" opacity="0.2"/>
+  
+  <!-- Tarjeta principal del certificado con máscara -->
+  <g mask="url(#certificateMask)">
+    <rect x="120" y="120" width="1680" height="840" rx="15" ry="15" 
+          fill="url(#cardGradient)" filter="url(#dropShadow)"/>
+  </g>
+  
+  <!-- Líneas decorativas -->
+  <path d="M 120,200 H 1800" stroke="#1a2980" stroke-width="2" opacity="0.1"/>
+  <path d="M 120,880 H 1800" stroke="#1a2980" stroke-width="2" opacity="0.1"/>
+  
+  <!-- Esquinas decorativas -->
+  <g opacity="0.5">
+    <!-- Esquina superior izquierda -->
+    <path d="M 160,160 L 160,260 L 260,160 Z" fill="url(#accentGradient)"/>
+    <!-- Esquina superior derecha -->
+    <path d="M 1760,160 L 1760,260 L 1660,160 Z" fill="url(#accentGradient)"/>
+    <!-- Esquina inferior izquierda -->
+    <path d="M 160,840 L 160,740 L 260,840 Z" fill="url(#accentGradient)"/>
+    <!-- Esquina inferior derecha -->
+    <path d="M 1760,840 L 1760,740 L 1660,840 Z" fill="url(#accentGradient)"/>
+  </g>
+  
+  <!-- Círculos decorativos en las esquinas -->
+  <circle cx="160" cy="160" r="10" fill="url(#accentGradient)" filter="url(#softGlow)"/>
+  <circle cx="1760" cy="160" r="10" fill="url(#accentGradient)" filter="url(#softGlow)"/>
+  <circle cx="160" cy="920" r="10" fill="url(#accentGradient)" filter="url(#softGlow)"/>
+  <circle cx="1760" cy="920" r="10" fill="url(#accentGradient)" filter="url(#softGlow)"/>
+  
+  <!-- Logotipo en la parte superior -->
+  <g transform="translate(960, 210)">
+    <circle cx="0" cy="0" r="60" fill="url(#bgGradient)" filter="url(#softGlow)"/>
+    <text x="0" y="20" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="60" font-weight="bold">🏆</text>
+  </g>
+  
+  <!-- Título principal -->
+  <text x="960" y="330" text-anchor="middle" fill="url(#titleGradient)" 
+        font-family="'Segoe UI', sans-serif" font-size="60" font-weight="bold" 
+        letter-spacing="2px" filter="url(#softGlow)">CERTIFICADO</text>
+  
+  <!-- Subtítulo -->
+  <text x="960" y="380" text-anchor="middle" fill="#666" 
+        font-family="'Segoe UI', sans-serif" font-size="28" font-weight="300" 
+        letter-spacing="10px">DE PARTICIPACIÓN</text>
+  
+  <!-- Línea decorativa central -->
+  <path d="M 720,420 H 1200" stroke="url(#accentGradient)" stroke-width="3" opacity="0.8"/>
+  
+  <!-- Contenido principal: Frase introductoria -->
+  <text x="960" y="470" text-anchor="middle" fill="#444" 
+        font-family="'Segoe UI', sans-serif" font-size="24" font-weight="300">
+    Certificamos que
+  </text>
+  
+  <!-- Nombre del participante (destacado) -->
+  <rect x="480" y="490" width="960" height="100" rx="8" ry="8" 
+        fill="none" stroke="url(#accentGradient)" stroke-width="2" opacity="0.3"/>
+  <text x="960" y="550" text-anchor="middle" fill="#222" 
+        font-family="'Segoe UI', sans-serif" font-size="46" font-weight="bold">
+    Andres Fernando Pineda Guerra
+  </text>
+  
+  <!-- Texto de participación -->
+  <text x="960" y="630" text-anchor="middle" fill="#444" 
+        font-family="'Segoe UI', sans-serif" font-size="24" font-weight="300">
+    ha participado exitosamente en el evento
+  </text>
+  
+  <!-- Nombre del evento -->
+  <text x="960" y="690" text-anchor="middle" fill="url(#titleGradient)" 
+        font-family="'Segoe UI', sans-serif" font-size="34" font-weight="600">
+    Bootcamp de Inteligencia Artificial Aplicada
+  </text>
+  
+  <!-- Información del evento: fechas -->
+  <g transform="translate(960, 740)">
+    <text x="0" y="0" text-anchor="middle" fill="#666" 
+          font-family="'Segoe UI', sans-serif" font-size="22">
+      Del 01/06/2025 al 07/06/2025
+    </text>
+  </g>
+  
+  <!-- Información del evento: organizador -->
+  <g transform="translate(960, 780)">
+    <text x="0" y="0" text-anchor="middle" fill="#666" 
+          font-family="'Segoe UI', sans-serif" font-size="22">
+      Organizado por Centro Latinoamericano de Innovación Tecnológica
+    </text>
+  </g>
+  
+  <!-- Detalles adicionales -->
+  <g transform="translate(960, 820)">
+    <text x="0" y="0" text-anchor="middle" fill="#666" 
+          font-family="'Segoe UI', sans-serif" font-size="18">
+      Modalidad: Virtual | Duración: 18 horas | Lugar: Plataforma Zoom
+    </text>
+  </g>
+  
+  <!-- Badge del rol -->
+  <g transform="translate(960, 865)">
+    <rect x="-70" y="-20" width="140" height="40" rx="20" ry="20" 
+          fill="url(#bgGradient)" filter="url(#softGlow)"/>
+    <text x="0" y="5" text-anchor="middle" fill="white" 
+          font-family="'Segoe UI', sans-serif" font-size="18" font-weight="600">
+      Participante
+    </text>
+  </g>
+  
+  <!-- Fecha de emisión -->
+  <g transform="translate(300, 940)">
+    <text x="0" y="0" text-anchor="start" fill="#666" 
+          font-family="'Segoe UI', sans-serif" font-size="16">
+      Fecha de emisión: 09/06/2025 17:00
+    </text>
+  </g>
+  
+  <!-- Número de certificado -->
+  <g transform="translate(300, 970)">
+    <text x="0" y="0" text-anchor="start" fill="#666" 
+          font-family="'Segoe UI', sans-serif" font-size="16">
+      Certificado Nº: CERT-2025-000009
+    </text>
+  </g>
+  
+  <!-- Sello de verificación digital -->
+  <g transform="translate(1620, 940)">
+    <rect x="-140" y="-30" width="280" height="60" rx="8" ry="8" 
+          fill="#f8f9fa" stroke="#e1e1e1" stroke-width="1"/>
+    <text x="0" y="-5" text-anchor="middle" fill="#666" 
+          font-family="'Courier New', monospace" font-size="14">
+      CÓDIGO DE VERIFICACIÓN
+    </text>
+    <text x="0" y="20" text-anchor="middle" fill="url(#titleGradient)" 
+          font-family="'Courier New', monospace" font-size="20" font-weight="bold">
+      FEFAG2OHRJLG
+    </text>
+  </g>
+  
+  <!-- QR Code (simulado) -->
+  <g transform="translate(1720, 820)">
+    <rect x="-30" y="-30" width="60" height="60" fill="#f5f5f5" stroke="#ddd" stroke-width="1"/>
+    <text x="0" y="5" text-anchor="middle" fill="#999" font-family="Arial, sans-serif" font-size="14">QR</text>
+  </g>
+  
+  <!-- URL de verificación -->
+  <g transform="translate(1720, 870)">
+    <text x="0" y="0" text-anchor="middle" fill="#666" 
+          font-family="Arial, sans-serif" font-size="12">
+      Verificar en:
+    </text>
+    <text x="0" y="15" text-anchor="middle" fill="#1a2980" 
+          font-family="Arial, sans-serif" font-size="10">
+      http://localhost/certificados_digitales/public/verificar.php?codigo=FEFAG2OHRJLG
+    </text>
+  </g>
+  
+  <!-- Línea de firma -->
+  <g transform="translate(960, 920)">
+    <line x1="-100" y1="0" x2="100" y2="0" stroke="#ddd" stroke-width="2"/>
+    <text x="0" y="30" text-anchor="middle" fill="#666" 
+          font-family="'Segoe UI', sans-serif" font-size="18">
+      Firma Digital
+    </text>
+  </g>
+  
+  <!-- Elementos adicionales decorativos -->
+  <g opacity="0.1">
+    <circle cx="200" cy="400" r="40" fill="url(#accentGradient)"/>
+    <circle cx="1720" cy="400" r="40" fill="url(#accentGradient)"/>
+    <circle cx="200" cy="680" r="40" fill="url(#accentGradient)"/>
+    <circle cx="1720" cy="680" r="40" fill="url(#accentGradient)"/>
+  </g>
+</svg>
