@@ -238,6 +238,7 @@ function generarCertificadoMasivo($participante, $plantilla) {
             '{{horas_duracion}}' => $participante['horas_duracion'],
             '{{codigo_verificacion}}' => $codigo_verificacion,
             '{{fecha_generacion}}' => date('d/m/Y H:i'),
+            '{{nombre_completo}}' => $participante['nombres'] . ' ' . $participante['apellidos'],
             '{{url_verificacion}}' => BASE_URL . 'public/verificar.php?codigo=' . $codigo_verificacion
         ];
         

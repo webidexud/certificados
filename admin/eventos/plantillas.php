@@ -78,8 +78,9 @@ if ($_POST && isset($_FILES['archivo_plantilla'])) {
                 
                 // Variables obligatorias
                 $variables_requeridas = [
-                    '{{nombres}}', 
-                    '{{apellidos}}', 
+                    '{{nombre_completo}}',
+                    '{{nombres}}',  // Opcional por compatibilidad
+                    '{{apellidos}}', // Opcional por compatibilidad
                     '{{evento_nombre}}', 
                     '{{codigo_verificacion}}',
                     '{{numero_identificacion}}'
@@ -640,8 +641,9 @@ if (!function_exists('formatearRol')) {
                 <h4>📋 Información Importante sobre Plantillas SVG</h4>
                 <ul>
                     <li><strong>Variables Obligatorias:</strong> 
-                        <span class="variable-tag">{{nombres}}</span>
-                        <span class="variable-tag">{{apellidos}}</span>
+                        <li><strong>{{nombre_completo}}</strong> - Nombre completo del participante (nombres + apellidos)</li>
+                        <li><strong>{{nombres}}</strong> - Solo nombres (opcional)</li>
+                        <li><strong>{{apellidos}}</strong> - Solo apellidos (opcional)</li>
                         <span class="variable-tag">{{evento_nombre}}</span>
                         <span class="variable-tag">{{codigo_verificacion}}</span>
                         <span class="variable-tag">{{numero_identificacion}}</span>

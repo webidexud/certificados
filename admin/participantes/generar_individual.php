@@ -137,6 +137,8 @@ function generarCertificadoConPlantilla($participante, $plantilla) {
             // URLs y enlaces
             '{{url_verificacion}}' => PUBLIC_URL . 'verificar.php?codigo=' . $codigo_verificacion,
             '{{numero_certificado}}' => 'CERT-' . date('Y') . '-' . str_pad($participante['id'], 6, '0', STR_PAD_LEFT),
+
+            '{{nombre_completo}}' => $participante['nombres'] . ' ' . $participante['apellidos'],
             
             // Extras
             '{{nombre_completo}}' => $participante['nombres'] . ' ' . $participante['apellidos'],

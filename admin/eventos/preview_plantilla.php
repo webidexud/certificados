@@ -46,6 +46,7 @@ try {
     // Datos de ejemplo para el preview
     $datos_ejemplo = [
         // DATOS DEL PARTICIPANTE
+        '{{nombre_completo}}' => 'Juan Carlos García López',
         '{{nombres}}' => 'Juan Carlos',
         '{{apellidos}}' => 'García López',
         '{{rol}}' => $plantilla['rol'],
