@@ -1,0 +1,53 @@
+﻿services:
+  mysql:
+    image: mysql:8.0
+    container_name: certificados-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ""
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_DATABASE: certificados_idexud
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql:/docker-entrypoint-initdb.d
+    ports:
+      - "3307:3306"
+    networks:
+      - certificados_network
+    command: --default-authentication-plugin=mysql_native_password
+
+  app:
+    build: .
+    container_name: certificados-app
+    ports:
+      - "9080:80"
+    environment:
+      - DB_HOST=mysql
+      - DB_NAME=certificados_idexud
+      - DB_USER=root
+      - DB_PASSWORD=
+      - BASE_URL=http://localhost:9080/
+      - ADMIN_URL=http://localhost:9080/admin/
+      - PUBLIC_URL=http://localhost:9080/public/
+      - ENVIRONMENT=docker
+      - DEBUG_MODE=true
+      - SESSION_TIMEOUT=3600
+      - MAX_FILE_SIZE=10485760
+    volumes:
+      - uploads_data:/var/www/html/uploads
+      - templates_data:/var/www/html/templates
+      - generated_data:/var/www/html/generated
+    depends_on:
+      - mysql
+    restart: unless-stopped
+    networks:
+      - certificados_network
+
+networks:
+  certificados_network:
+    driver: bridge
+
+volumes:
+  uploads_data:
+  templates_data:
+  generated_data:
+  mysql_data:
