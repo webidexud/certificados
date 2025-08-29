@@ -43,17 +43,28 @@ if ($evento_id > 0) {
         if ($evento_seleccionado) {
             // Obtener participantes con información de certificados
             $stmt = $db->prepare("
-                SELECT p.*, 
-                       c.id as certificado_id,
-                       c.codigo_verificacion,
-                       c.fecha_generacion,
-                       COUNT(pt.id) as plantillas_disponibles
+                SELECT p.id,
+                    p.evento_id,
+                    p.nombres, 
+                    p.apellidos,
+                    p.numero_identificacion,
+                    p.correo_electronico,
+                    p.rol,
+                    p.telefono,
+                    p.institucion,
+                    p.created_at,
+                    p.updated_at,
+                    c.id as certificado_id,
+                    c.codigo_verificacion,
+                    c.fecha_generacion,
+                    (SELECT COUNT(*) 
+                        FROM plantillas_certificados pt 
+                        WHERE pt.evento_id = p.evento_id 
+                        AND (pt.rol = p.rol OR pt.rol = 'General')
+                    ) as plantillas_disponibles
                 FROM participantes p
                 LEFT JOIN certificados c ON p.id = c.participante_id
-                LEFT JOIN plantillas_certificados pt ON p.evento_id = pt.evento_id 
-                    AND (pt.rol = p.rol OR pt.rol = 'General')
                 WHERE p.evento_id = ?
-                GROUP BY p.id
                 ORDER BY p.apellidos, p.nombres
             ");
             $stmt->execute([$evento_id]);

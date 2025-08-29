@@ -78,19 +78,46 @@ if ($_POST && isset($_FILES['archivo_plantilla'])) {
                 
                 // Variables obligatorias
                 $variables_requeridas = [
-                    '{{nombre_completo}}',
-                    '{{nombres}}',  // Opcional por compatibilidad
-                    '{{apellidos}}', // Opcional por compatibilidad
                     '{{evento_nombre}}', 
                     '{{codigo_verificacion}}',
                     '{{numero_identificacion}}'
                 ];
-                
+
+                // Variables para nombres (al menos UNA debe estar presente)
+                $variables_nombres = [
+                    '{{nombre_completo}}',
+                    '{{nombres}}',
+                    '{{apellidos}}'
+                ];
+
+                // Verificar variables obligatorias
                 $variables_faltantes = [];
                 foreach ($variables_requeridas as $variable) {
                     if (strpos($contenido_svg, $variable) === false) {
                         $variables_faltantes[] = $variable;
                     }
+                }
+
+                // Verificar que haya al menos UNA variable de nombre
+                $tiene_variable_nombre = false;
+                foreach ($variables_nombres as $variable) {
+                    if (strpos($contenido_svg, $variable) !== false) {
+                        $tiene_variable_nombre = true;
+                        break;
+                    }
+                }
+
+                if (!$tiene_variable_nombre) {
+                    $variables_faltantes[] = 'Al menos una variable de nombre: {{nombre_completo}} O {{nombres}} + {{apellidos}}';
+                }
+
+                // Validación especial: si usa {{nombres}}, debe tener también {{apellidos}}
+                if (strpos($contenido_svg, '{{nombres}}') !== false && strpos($contenido_svg, '{{apellidos}}') === false) {
+                    $variables_faltantes[] = '{{apellidos}} - requerida cuando se usa {{nombres}}';
+                }
+
+                if (strpos($contenido_svg, '{{apellidos}}') !== false && strpos($contenido_svg, '{{nombres}}') === false) {
+                    $variables_faltantes[] = '{{nombres}} - requerida cuando se usa {{apellidos}}';
                 }
                 
                 if (!empty($variables_faltantes)) {
@@ -641,12 +668,13 @@ if (!function_exists('formatearRol')) {
                 <h4>📋 Información Importante sobre Plantillas SVG</h4>
                 <ul>
                     <li><strong>Variables Obligatorias:</strong> 
-                        <li><strong>{{nombre_completo}}</strong> - Nombre completo del participante (nombres + apellidos)</li>
-                        <li><strong>{{nombres}}</strong> - Solo nombres (opcional)</li>
-                        <li><strong>{{apellidos}}</strong> - Solo apellidos (opcional)</li>
                         <span class="variable-tag">{{evento_nombre}}</span>
                         <span class="variable-tag">{{codigo_verificacion}}</span>
                         <span class="variable-tag">{{numero_identificacion}}</span>
+                    </li>
+                    <li><strong>Variables de Nombre (elegir una opción):</strong> 
+                        <li><strong>Opción A:</strong> <span class="variable-tag">{{nombre_completo}}</span> - Nombre completo automático</li>
+                        <li><strong>Opción B:</strong> <span class="variable-tag">{{nombres}}</span> + <span class="variable-tag">{{apellidos}}</span> - Por separado</li>
                     </li>
                     <li><strong>Variables Opcionales:</strong> 
                         <span class="variable-tag">{{fecha_inicio}}</span>
