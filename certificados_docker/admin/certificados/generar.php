@@ -1,5 +1,5 @@
 <?php
-// admin/certificados/generar.php - VERSIÓN CON DISEÑO COHERENTE
+// admin/certificados/generar.php - VERSIÓN CORREGIDA SIN ERRORES SQL
 require_once '../../config/config.php';
 require_once '../../includes/funciones.php';
 
@@ -41,19 +41,29 @@ if ($evento_id > 0) {
         $evento_seleccionado = $stmt->fetch();
         
         if ($evento_seleccionado) {
-            // Obtener participantes con información de certificados
+            // CONSULTA CORREGIDA: Sin GROUP BY problemático
             $stmt = $db->prepare("
-                SELECT p.*, 
+                SELECT p.id,
+                       p.nombres,
+                       p.apellidos,
+                       p.numero_identificacion,
+                       p.correo_electronico,
+                       p.rol,
+                       p.telefono,
+                       p.institucion,
+                       p.evento_id,
+                       p.created_at,
                        c.id as certificado_id,
                        c.codigo_verificacion,
                        c.fecha_generacion,
-                       COUNT(pt.id) as plantillas_disponibles
+                       c.tipo_archivo,
+                       c.estado as certificado_estado,
+                       (SELECT COUNT(*) FROM plantillas_certificados pt 
+                        WHERE pt.evento_id = p.evento_id 
+                        AND (pt.rol = p.rol OR pt.rol = 'General')) as plantillas_disponibles
                 FROM participantes p
                 LEFT JOIN certificados c ON p.id = c.participante_id
-                LEFT JOIN plantillas_certificados pt ON p.evento_id = pt.evento_id 
-                    AND (pt.rol = p.rol OR pt.rol = 'General')
                 WHERE p.evento_id = ?
-                GROUP BY p.id
                 ORDER BY p.apellidos, p.nombres
             ");
             $stmt->execute([$evento_id]);
@@ -61,6 +71,7 @@ if ($evento_id > 0) {
         }
     } catch (Exception $e) {
         $error = "Error al cargar datos del evento: " . $e->getMessage();
+        error_log("SQL Error: " . $e->getMessage());
     }
 }
 
@@ -71,7 +82,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
     $evento_id_post = intval($_POST['evento_id'] ?? 0);
     
     error_log("DEBUG: Acción recibida: " . $accion);
-    error_log("DEBUG: Participantes seleccionados: " . print_r($participantes_seleccionados, true));
+    error_log("DEBUG: Participantes seleccionados: " . count($participantes_seleccionados));
     error_log("DEBUG: Evento ID: " . $evento_id_post);
     
     if (empty($participantes_seleccionados)) {
@@ -94,10 +105,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
                             continue; // Ya tiene certificado, saltar
                         }
                         
-                        // Obtener datos del participante
+                        // Obtener datos completos del participante
                         $stmt = $db->prepare("
-                            SELECT p.*, e.nombre as evento_nombre, e.fecha_inicio, e.fecha_fin,
-                                   e.entidad_organizadora, e.modalidad, e.lugar, e.horas_duracion, e.descripcion
+                            SELECT p.id,
+                                   p.nombres,
+                                   p.apellidos,
+                                   p.numero_identificacion,
+                                   p.correo_electronico,
+                                   p.rol,
+                                   p.telefono,
+                                   p.institucion,
+                                   p.evento_id,
+                                   e.nombre as evento_nombre,
+                                   e.fecha_inicio,
+                                   e.fecha_fin,
+                                   e.entidad_organizadora,
+                                   e.modalidad,
+                                   e.lugar,
+                                   e.horas_duracion,
+                                   e.descripcion
                             FROM participantes p 
                             JOIN eventos e ON p.evento_id = e.id 
                             WHERE p.id = ?
@@ -111,10 +137,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
                             continue;
                         }
                         
-                        // Buscar plantilla para el rol
+                        // Buscar plantilla para el rol (consulta optimizada)
                         $stmt = $db->prepare("
-                            SELECT * FROM plantillas_certificados 
-                            WHERE evento_id = ? AND (rol = ? OR rol = 'General') 
+                            SELECT id, evento_id, rol, archivo_plantilla, variables_disponibles, created_at, updated_at
+                            FROM plantillas_certificados 
+                            WHERE evento_id = ? 
+                            AND (rol = ? OR rol = 'General') 
                             ORDER BY CASE WHEN rol = ? THEN 1 ELSE 2 END 
                             LIMIT 1
                         ");
@@ -204,7 +232,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
     exit;
 }
 
-// FUNCIÓN PARA GENERAR CERTIFICADO MASIVO (COMPLETA)
+// FUNCIÓN PARA GENERAR CERTIFICADO MASIVO (MEJORADA)
 function generarCertificadoMasivo($participante, $plantilla) {
     try {
         $db = Database::getInstance()->getConnection();
@@ -214,13 +242,16 @@ function generarCertificadoMasivo($participante, $plantilla) {
         
         // Leer plantilla SVG
         $ruta_plantilla = TEMPLATE_PATH . $plantilla['archivo_plantilla'];
-        $contenido_svg = file_get_contents($ruta_plantilla);
+        if (!file_exists($ruta_plantilla)) {
+            throw new Exception("Archivo de plantilla no encontrado: " . $plantilla['archivo_plantilla']);
+        }
         
+        $contenido_svg = file_get_contents($ruta_plantilla);
         if ($contenido_svg === false) {
             throw new Exception("No se pudo leer la plantilla SVG");
         }
         
-        // Datos para reemplazar
+        // Datos para reemplazar en la plantilla
         $datos_certificado = [
             '{{nombres}}' => $participante['nombres'],
             '{{apellidos}}' => $participante['apellidos'],
@@ -242,10 +273,10 @@ function generarCertificadoMasivo($participante, $plantilla) {
             '{{url_verificacion}}' => BASE_URL . 'public/verificar.php?codigo=' . $codigo_verificacion
         ];
         
-        // Reemplazar variables
+        // Reemplazar variables en la plantilla
         $contenido_final = str_replace(array_keys($datos_certificado), array_values($datos_certificado), $contenido_svg);
         
-        // Generar archivo
+        // Generar nombre del archivo
         $nombre_archivo = $codigo_verificacion . '_' . time() . '.svg';
         $ruta_completa = GENERATED_PATH . 'certificados/' . $nombre_archivo;
         
@@ -259,10 +290,10 @@ function generarCertificadoMasivo($participante, $plantilla) {
             throw new Exception("No se pudo escribir el archivo SVG");
         }
         
-        // Hash de validación
+        // Hash de validación para seguridad
         $hash_validacion = hash('sha256', $participante['id'] . $codigo_verificacion . $participante['nombres']);
         
-        // Insertar en BD
+        // Insertar registro en la base de datos
         $stmt = $db->prepare("
             INSERT INTO certificados (participante_id, evento_id, codigo_verificacion, archivo_pdf, hash_validacion, tipo_archivo) 
             VALUES (?, ?, ?, ?, ?, 'svg')
@@ -278,7 +309,7 @@ function generarCertificadoMasivo($participante, $plantilla) {
             
             return ['success' => true, 'codigo' => $codigo_verificacion, 'archivo' => $nombre_archivo];
         } else {
-            throw new Exception("Error al insertar en la base de datos");
+            throw new Exception("Error al insertar en la base de datos: " . implode(', ', $stmt->errorInfo()));
         }
         
     } catch (Exception $e) {
@@ -286,6 +317,7 @@ function generarCertificadoMasivo($participante, $plantilla) {
         return ['success' => false, 'error' => $e->getMessage()];
     }
 }
+
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -293,1074 +325,363 @@ function generarCertificadoMasivo($participante, $plantilla) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Generar Certificados - Sistema de Certificados</title>
+    <link rel="stylesheet" href="../../assets/css/style.css">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f8f9fa;
-            line-height: 1.6;
-            color: #333;
-        }
-        
-        /* HEADER */
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 1rem 0;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-            position: sticky;
-            top: 0;
-            z-index: 1000;
-        }
-        
-        .header-content {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .logo h1 {
-            font-size: 1.6rem;
-            font-weight: 700;
-        }
-        
-        .user-info {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            font-size: 0.9rem;
-        }
-        
-        .btn-logout {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 0.6rem 1.2rem;
-            text-decoration: none;
-            border-radius: 8px;
-            font-weight: 500;
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-        }
-        
-        .btn-logout:hover {
-            background: rgba(255,255,255,0.3);
-            transform: translateY(-1px);
-        }
-        
-        /* NAVIGATION */
-        .nav {
-            background: white;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            position: sticky;
-            top: 73px;
-            z-index: 999;
-        }
-        
-        .nav-content {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 20px;
-        }
-        
-        .nav ul {
-            list-style: none;
-            display: flex;
-            gap: 2rem;
-        }
-        
-        .nav a {
-            display: block;
-            padding: 1rem 0;
-            text-decoration: none;
-            color: #333;
-            font-weight: 500;
-            transition: all 0.3s ease;
-            border-bottom: 3px solid transparent;
-            position: relative;
-        }
-        
-        .nav a:hover, .nav a.active {
-            color: #667eea;
-            border-bottom-color: #667eea;
-        }
-        
-        /* CONTAINER */
-        .container {
-            max-width: 1200px;
-            margin: 2rem auto;
-            padding: 0 20px;
-        }
-        
-        /* PAGE HEADER */
-        .page-header {
-            background: white;
-            padding: 2rem;
-            border-radius: 12px;
-            margin-bottom: 2rem;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 1rem;
-        }
-        
-        .page-title h2 {
-            color: #333;
-            font-size: 1.8rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        
-        .breadcrumb {
-            color: #666;
-            font-size: 0.9rem;
-            margin-top: 0.5rem;
-        }
-        
-        .breadcrumb a {
-            color: #667eea;
-            text-decoration: none;
-        }
-        
-        .breadcrumb a:hover {
-            text-decoration: underline;
-        }
-        
-        /* CARDS */
-        .card {
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            overflow: hidden;
-            margin-bottom: 2rem;
-            border: 1px solid rgba(0,0,0,0.05);
-        }
-        
-        .card-header {
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-            padding: 1.5rem;
-            border-bottom: 1px solid #dee2e6;
-            font-weight: 600;
-            font-size: 1.1rem;
-            color: #333;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        
-        .card-body {
-            padding: 2rem;
-        }
-        
-        /* ALERTS */
-        .alert {
-            padding: 1rem 1.5rem;
-            margin-bottom: 1.5rem;
-            border-radius: 10px;
-            font-weight: 500;
-            border-left: 4px solid;
-        }
-        
-        .alert-success {
-            background-color: #d4f6d4;
-            color: #0f5132;
-            border-left-color: #28a745;
-        }
-        
-        .alert-error {
-            background-color: #f8d7da;
-            color: #721c24;
-            border-left-color: #dc3545;
-        }
-        
-        .alert-info {
-            background-color: #d1ecf1;
-            color: #0c5460;
-            border-left-color: #17a2b8;
-        }
-        
-        /* FORM ELEMENTS */
-        .form-group {
-            margin-bottom: 1.5rem;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 0.5rem;
-            font-weight: 500;
-            color: #333;
-            font-size: 0.95rem;
-        }
-        
-        select, input {
-            width: 100%;
-            padding: 0.75rem;
-            border: 2px solid #e1e1e1;
-            border-radius: 8px;
-            font-size: 1rem;
-            transition: all 0.3s ease;
-            background: white;
-        }
-        
-        select:focus, input:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-        }
-        
-        /* BUTTONS - Más Minimalistas */
-        .btn {
-            padding: 0.6rem 1.2rem;
-            border: none;
-            border-radius: 6px;
-            font-size: 0.875rem;
-            font-weight: 500;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-            transition: all 0.2s ease;
-            text-align: center;
-            white-space: nowrap;
-            position: relative;
-            overflow: hidden;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-        }
-        
-        .btn::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
-            transition: left 0.4s;
-        }
-        
-        .btn:hover::before {
-            left: 100%;
-        }
-        
-        .btn-primary {
-            background: #667eea;
-            color: white;
-            border: 1px solid transparent;
-        }
-        
-        .btn-primary:hover {
-            background: #5a6fd8;
-            transform: translateY(-1px);
-            box-shadow: 0 3px 8px rgba(102, 126, 234, 0.25);
-        }
-        
-        .btn-success {
-            background: #28a745;
-            color: white;
-            border: 1px solid transparent;
-        }
-        
-        .btn-success:hover {
-            background: #218838;
-            transform: translateY(-1px);
-            box-shadow: 0 3px 8px rgba(40, 167, 69, 0.25);
-        }
-        
-        .btn-warning {
-            background: #ffc107;
-            color: #212529;
-            border: 1px solid transparent;
-        }
-        
-        .btn-warning:hover {
-            background: #e0a800;
-            transform: translateY(-1px);
-            box-shadow: 0 3px 8px rgba(255, 193, 7, 0.25);
-        }
-        
-        .btn-danger {
-            background: #dc3545;
-            color: white;
-            border: 1px solid transparent;
-        }
-        
-        .btn-danger:hover {
-            background: #c82333;
-            transform: translateY(-1px);
-            box-shadow: 0 3px 8px rgba(220, 53, 69, 0.25);
-        }
-        
-        .btn-secondary {
-            background: #6c757d;
-            color: white;
-            border: 1px solid transparent;
-        }
-        
-        .btn-secondary:hover {
-            background: #5a6268;
-            transform: translateY(-1px);
-            box-shadow: 0 3px 8px rgba(108, 117, 125, 0.25);
-        }
-        
-        .btn-sm {
-            padding: 0.4rem 0.8rem;
-            font-size: 0.8rem;
+        .participantes-container {
+            max-height: 500px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
             border-radius: 4px;
         }
         
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none !important;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
+        .participante-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 15px;
+            border-bottom: 1px solid #eee;
+            background: #fff;
         }
         
-        .btn:disabled::before {
-            display: none;
+        .participante-item:hover {
+            background: #f8f9fa;
         }
         
-        .btn:active {
-            transform: translateY(0);
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        .participante-item.tiene-certificado {
+            background: #e8f5e8;
         }
         
-        /* TABLES - Mejoradas */
-        .table-responsive {
-            overflow-x: auto;
-            border-radius: 15px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-            background: white;
-            border: 1px solid rgba(0,0,0,0.05);
+        .participante-info {
+            flex: 1;
+            margin-left: 10px;
         }
         
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-            margin: 0;
-        }
-        
-        th, td {
-            padding: 1.25rem 1rem;
-            text-align: left;
-            border-bottom: 1px solid #f1f3f4;
-            vertical-align: middle;
-        }
-        
-        th {
-            background: linear-gradient(135deg, #f8f9fc 0%, #eef1f7 100%);
-            font-weight: 700;
-            color: #2d3748;
-            font-size: 0.85rem;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            border-bottom: 2px solid #e2e8f0;
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }
-        
-        th:first-child {
-            border-radius: 15px 0 0 0;
-            padding-left: 1.5rem;
-        }
-        
-        th:last-child {
-            border-radius: 0 15px 0 0;
-            padding-right: 1.5rem;
-        }
-        
-        td:first-child {
-            padding-left: 1.5rem;
-        }
-        
-        td:last-child {
-            padding-right: 1.5rem;
-        }
-        
-        tr {
-            transition: all 0.3s ease;
-        }
-        
-        tbody tr:hover {
-            background: linear-gradient(135deg, rgba(102, 126, 234, 0.02) 0%, rgba(118, 75, 162, 0.02) 100%);
-            transform: scale(1.005);
-            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-        }
-        
-        tbody tr:last-child td:first-child {
-            border-radius: 0 0 0 15px;
-        }
-        
-        tbody tr:last-child td:last-child {
-            border-radius: 0 0 15px 0;
-        }
-        
-        tbody tr:last-child td {
-            border-bottom: none;
-        }
-        
-        /* Mejoras en las celdas */
-        .participant-name {
-            font-weight: 600;
-            color: #2d3748;
-            font-size: 1rem;
-            margin-bottom: 0.25rem;
-        }
-        
-        .participant-email {
-            color: #718096;
-            font-size: 0.875rem;
-            font-style: italic;
-        }
-        
-        .participant-id {
-            font-family: 'Monaco', 'Consolas', monospace;
-            background: #f7fafc;
-            padding: 0.25rem 0.5rem;
-            border-radius: 6px;
-            font-size: 0.875rem;
-            font-weight: 600;
-            color: #4a5568;
-            border: 1px solid #e2e8f0;
-        }
-        
-        /* BADGES */
-        .badge {
-            padding: 0.3rem 0.8rem;
-            border-radius: 20px;
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .badge-success {
-            background-color: #d4edda;
-            color: #155724;
-        }
-        
-        .badge-warning {
-            background-color: #fff3cd;
-            color: #856404;
-        }
-        
-        .badge-danger {
-            background-color: #f8d7da;
-            color: #721c24;
-        }
-        
-        /* EMPTY STATE */
-        .empty-state {
-            text-align: center;
-            padding: 4rem 2rem;
-            color: #666;
-        }
-        
-        .empty-state h3 {
-            margin: 1rem 0;
+        .participante-nombre {
+            font-weight: bold;
             color: #333;
         }
         
-        /* BULK ACTIONS - Mejorado */
-        .bulk-actions {
-            background: linear-gradient(135deg, #f8f9fc 0%, #eef1f7 100%);
-            padding: 1.5rem;
-            border-radius: 12px;
-            margin-bottom: 1.5rem;
-            display: flex;
-            gap: 1rem;
-            align-items: center;
-            flex-wrap: wrap;
-            border: 2px solid #e2e8f0;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        .participante-detalles {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 2px;
         }
         
-        .bulk-actions label {
-            font-weight: 600;
-            color: #2d3748;
-            margin-bottom: 0;
+        .certificado-estado {
+            font-size: 0.8em;
+            padding: 2px 8px;
+            border-radius: 3px;
+            margin-left: 10px;
         }
         
-        .bulk-actions select {
-            max-width: 220px;
-            border: 2px solid #e2e8f0;
+        .estado-generado {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .estado-pendiente {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .acciones-masivas {
+            background: #f8f9fa;
+            padding: 15px;
             border-radius: 8px;
-            padding: 0.75rem;
-            background: white;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            transition: all 0.3s ease;
+            margin: 20px 0;
+            display: none;
         }
         
-        .bulk-actions select:focus {
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        .acciones-masivas.active {
+            display: block;
         }
         
-        .bulk-actions #contador-info {
-            background: rgba(102, 126, 234, 0.1);
-            padding: 0.5rem 1rem;
-            border-radius: 20px;
-            font-size: 0.875rem;
-            font-weight: 500;
-            color: #4c51bf;
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
         }
         
-        /* STATS */
+        .progress-info {
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+        
+        .progress-bar {
+            background: #e9ecef;
+            height: 20px;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        
+        .progress-fill {
+            background: linear-gradient(90deg, #28a745, #20c997);
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+        
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-bottom: 2rem;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 15px 0;
         }
         
         .stat-card {
             background: white;
-            padding: 1.5rem;
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #007bff;
             text-align: center;
-            transition: all 0.3s ease;
-            border: 1px solid rgba(0,0,0,0.05);
-        }
-        
-        .stat-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
         }
         
         .stat-number {
-            font-size: 2rem;
-            font-weight: 700;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            margin-bottom: 0.5rem;
+            font-size: 2em;
+            font-weight: bold;
+            color: #007bff;
         }
         
         .stat-label {
             color: #666;
-            font-size: 0.9rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            font-weight: 500;
-        }
-        
-        /* RESPONSIVE */
-        @media (max-width: 768px) {
-            .header-content {
-                flex-direction: column;
-                gap: 1rem;
-                text-align: center;
-            }
-            
-            .nav ul {
-                flex-direction: column;
-                gap: 0;
-            }
-            
-            .nav a {
-                padding: 0.75rem 0;
-                border-bottom: 1px solid #e9ecef;
-                border-bottom-width: 1px !important;
-            }
-            
-            .page-header {
-                flex-direction: column;
-                text-align: center;
-            }
-            
-            .bulk-actions {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            
-            .bulk-actions select, .bulk-actions .btn {
-                width: 100%;
-            }
-            
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            table {
-                font-size: 0.875rem;
-            }
-            
-            th, td {
-                padding: 0.75rem 0.5rem;
-            }
+            font-size: 0.9em;
         }
     </style>
 </head>
 <body>
-    <!-- Header -->
-    <header class="header">
-        <div class="header-content">
-            <div class="logo">
-                <h1>🎓 Sistema de Certificados</h1>
-            </div>
-            <div class="user-info">
-                <span>👤 <?php echo htmlspecialchars($_SESSION['nombre']); ?></span>
-                <a href="../logout.php" class="btn-logout">🚪 Salir</a>
-            </div>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <h1>🎓 Sistema de Certificados</h1>
         </div>
-    </header>
-
-    <!-- Navigation -->
-    <nav class="nav">
-        <div class="nav-content">
+        <div class="nav-menu">
             <ul>
-                <li><a href="../index.php">🏠 Dashboard</a></li>
-                <li><a href="../eventos/listar.php">📅 Eventos</a></li>
-                <li><a href="../participantes/listar.php">👥 Participantes</a></li>
-                <li><a href="generar.php" class="active">🎓 Certificados</a></li>
+                <li><a href="../index.php">Dashboard</a></li>
+                <li><a href="../eventos/listar.php">Eventos</a></li>
+                <li><a href="../participantes/listar.php">Participantes</a></li>
+                <li><a href="generar.php" class="active">Certificados</a></li>
             </ul>
         </div>
     </nav>
-
-    <!-- Main Content -->
+    
     <div class="container">
-        <!-- Page Header -->
-        <div class="page-header">
-            <div class="page-title">
-                <h2>🎓 Generar Certificados</h2>
-                <div class="breadcrumb">
-                    <a href="../index.php">Dashboard</a> / 
-                    <strong>Certificados</strong>
-                </div>
+        <div class="actions-bar">
+            <div class="actions-left">
+                <h2>📜 Generar Certificados</h2>
+            </div>
+            <div class="actions-right">
+                <a href="../plantillas/listar.php" class="btn btn-secondary">
+                    🎨 Gestionar Plantillas
+                </a>
             </div>
         </div>
-
-        <!-- Alerts -->
-        <?php if ($error): ?>
-            <div class="alert alert-error">
-                <strong>❌ Error:</strong> <?php echo htmlspecialchars($error); ?>
-            </div>
-        <?php endif; ?>
-
+        
         <?php if ($success): ?>
             <div class="alert alert-success">
-                <strong>✅ Éxito:</strong> <?php echo htmlspecialchars($success); ?>
+                <?php echo htmlspecialchars($success); ?>
             </div>
         <?php endif; ?>
-
-        <!-- Event Selection -->
+        
+        <?php if ($error): ?>
+            <div class="alert alert-error">
+                <?php echo htmlspecialchars($error); ?>
+            </div>
+        <?php endif; ?>
+        
         <div class="card">
             <div class="card-header">
-                📅 Seleccionar Evento
+                <h3>🎯 Seleccionar Evento</h3>
             </div>
             <div class="card-body">
-                <?php if (empty($eventos)): ?>
-                    <div class="alert alert-info">
-                        <strong>ℹ️ Información:</strong> No hay eventos activos disponibles. 
-                        <a href="../eventos/crear.php">Crear nuevo evento</a>
+                <form method="GET">
+                    <div class="form-group">
+                        <label for="evento_id">Evento</label>
+                        <select id="evento_id" name="evento_id" class="form-control" onchange="this.form.submit()">
+                            <option value="">-- Seleccionar evento --</option>
+                            <?php foreach ($eventos as $evento): ?>
+                                <option value="<?php echo $evento['id']; ?>" 
+                                        <?php echo $evento_id == $evento['id'] ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars($evento['nombre']); ?> 
+                                    (<?php echo date('d/m/Y', strtotime($evento['fecha_inicio'])); ?>)
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
                     </div>
-                <?php else: ?>
-                    <form method="GET" action="">
-                        <div class="form-group">
-                            <label for="evento_id">Seleccione un evento para generar certificados:</label>
-                            <select name="evento_id" id="evento_id" onchange="this.form.submit()">
-                                <option value="">-- Seleccione un evento --</option>
-                                <?php foreach ($eventos as $evento): ?>
-                                    <option value="<?php echo $evento['id']; ?>" 
-                                            <?php echo ($evento['id'] == $evento_id) ? 'selected' : ''; ?>>
-                                        <?php echo htmlspecialchars($evento['nombre']); ?> 
-                                        (<?php echo date('d/m/Y', strtotime($evento['fecha_inicio'])); ?>)
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                    </form>
-                <?php endif; ?>
+                </form>
             </div>
         </div>
-
-        <?php if ($evento_seleccionado): ?>
-            <!-- Event Info -->
-            <div class="card">
-                <div class="card-header">
-                    📋 Información del Evento
-                </div>
-                <div class="card-body">
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-number"><?php echo count($participantes); ?></div>
-                            <div class="stat-label">Total Participantes</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">
-                                <?php echo count(array_filter($participantes, function($p) { return $p['certificado_id']; })); ?>
-                            </div>
-                            <div class="stat-label">Con Certificado</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">
-                                <?php echo count(array_filter($participantes, function($p) { return !$p['certificado_id']; })); ?>
-                            </div>
-                            <div class="stat-label">Sin Certificado</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">
-                                <?php echo count(array_filter($participantes, function($p) { return $p['plantillas_disponibles'] > 0; })); ?>
-                            </div>
-                            <div class="stat-label">Con Plantilla</div>
-                        </div>
+        
+        <?php if ($evento_seleccionado && !empty($participantes)): ?>
+            <?php
+            // Calcular estadísticas
+            $total_participantes = count($participantes);
+            $con_certificado = 0;
+            $sin_certificado = 0;
+            
+            foreach ($participantes as $p) {
+                if ($p['certificado_id']) {
+                    $con_certificado++;
+                } else {
+                    $sin_certificado++;
+                }
+            }
+            
+            $porcentaje = $total_participantes > 0 ? round(($con_certificado / $total_participantes) * 100, 1) : 0;
+            ?>
+            
+            <div class="progress-info">
+                <h4>📊 Progreso del Evento: <?php echo htmlspecialchars($evento_seleccionado['nombre']); ?></h4>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-number"><?php echo $total_participantes; ?></div>
+                        <div class="stat-label">Total Participantes</div>
                     </div>
-                    
-                    <h4><strong>📅 <?php echo htmlspecialchars($evento_seleccionado['nombre']); ?></strong></h4>
-                    <p><strong>📍 Modalidad:</strong> <?php echo ucfirst($evento_seleccionado['modalidad']); ?></p>
-                    <p><strong>📅 Fechas:</strong> 
-                        <?php echo date('d/m/Y', strtotime($evento_seleccionado['fecha_inicio'])); ?> - 
-                        <?php echo date('d/m/Y', strtotime($evento_seleccionado['fecha_fin'])); ?>
-                    </p>
-                    <?php if ($evento_seleccionado['horas_duracion']): ?>
-                        <p><strong>⏱️ Duración:</strong> <?php echo $evento_seleccionado['horas_duracion']; ?> horas</p>
-                    <?php endif; ?>
+                    <div class="stat-card">
+                        <div class="stat-number"><?php echo $con_certificado; ?></div>
+                        <div class="stat-label">Con Certificado</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number"><?php echo $sin_certificado; ?></div>
+                        <div class="stat-label">Pendientes</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number"><?php echo $porcentaje; ?>%</div>
+                        <div class="stat-label">Completado</div>
+                    </div>
+                </div>
+                
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: <?php echo $porcentaje; ?>%"></div>
                 </div>
             </div>
-
-            <?php if (empty($participantes)): ?>
-                <!-- Empty State -->
-                <div class="card">
-                    <div class="card-body">
-                        <div class="empty-state">
-                            <div style="font-size: 4rem; margin-bottom: 1rem;">👥</div>
-                            <h3>No hay participantes registrados</h3>
-                            <p>Agregue participantes a este evento antes de generar certificados.</p>
-                            <a href="../participantes/agregar.php?evento_id=<?php echo $evento_id; ?>" class="btn btn-primary">
-                                ➕ Agregar Participantes
-                            </a>
-                        </div>
+            
+            <div class="card">
+                <div class="card-header">
+                    <h3>👥 Participantes del Evento</h3>
+                    <div style="float: right;">
+                        <button type="button" onclick="seleccionarTodos()" class="btn btn-secondary btn-sm">
+                            ☑️ Seleccionar Todos
+                        </button>
+                        <button type="button" onclick="seleccionarSinCertificado()" class="btn btn-primary btn-sm">
+                            📋 Solo Pendientes
+                        </button>
+                        <button type="button" onclick="limpiarSeleccion()" class="btn btn-secondary btn-sm">
+                            🔄 Limpiar
+                        </button>
                     </div>
                 </div>
-            <?php else: ?>
-                <!-- Participants Table -->
-                <div class="card">
-                    <div class="card-header">
-                        👥 Participantes del Evento
-                    </div>
-                    <div class="card-body">
-                        <form method="POST" action="">
-                            <input type="hidden" name="evento_id" value="<?php echo $evento_id; ?>">
+                <div class="card-body">
+                    <form method="POST" id="form-acciones">
+                        <input type="hidden" name="evento_id" value="<?php echo $evento_id; ?>">
+                        
+                        <div class="participantes-container">
+                            <?php foreach ($participantes as $participante): ?>
+                                <div class="participante-item <?php echo $participante['certificado_id'] ? 'tiene-certificado' : ''; ?>">
+                                    <input type="checkbox" 
+                                           name="participantes[]" 
+                                           value="<?php echo $participante['id']; ?>"
+                                           class="participante-checkbox"
+                                           <?php echo !$participante['certificado_id'] ? '' : ''; ?>
+                                           onchange="actualizarAcciones()">
+                                    
+                                    <div class="participante-info">
+                                        <div class="participante-nombre">
+                                            <?php echo htmlspecialchars($participante['nombres'] . ' ' . $participante['apellidos']); ?>
+                                        </div>
+                                        <div class="participante-detalles">
+                                            🆔 <?php echo htmlspecialchars($participante['numero_identificacion']); ?> | 
+                                            🎭 <?php echo htmlspecialchars($participante['rol']); ?> | 
+                                            📧 <?php echo htmlspecialchars($participante['correo_electronico']); ?>
+                                            <?php if ($participante['plantillas_disponibles'] == 0): ?>
+                                                <span style="color: #dc3545;">⚠️ Sin plantilla</span>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="certificado-estado">
+                                        <?php if ($participante['certificado_id']): ?>
+                                            <span class="estado-generado">
+                                                ✅ Generado
+                                                <?php if ($participante['fecha_generacion']): ?>
+                                                    <br><small><?php echo date('d/m/Y H:i', strtotime($participante['fecha_generacion'])); ?></small>
+                                                <?php endif; ?>
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="estado-pendiente">⏳ Pendiente</span>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                        
+                        <div class="acciones-masivas" id="acciones-masivas">
+                            <h4>🛠️ Acciones Masivas</h4>
+                            <p id="contador-seleccionados">0 participantes seleccionados</p>
                             
-                            <!-- Bulk Actions -->
-                            <div class="bulk-actions">
-                                <label for="accion">Acción masiva:</label>
-                                <select name="accion" id="accion">
-                                    <option value="">-- Seleccione una acción --</option>
-                                    <option value="generar_certificados">🎓 Generar Certificados</option>
-                                    <option value="eliminar_certificados">🗑️ Eliminar Certificados</option>
-                                </select>
-                                <button type="submit" class="btn btn-primary" onclick="return confirmarAccionMasiva()">
-                                    ⚡ Ejecutar Acción
+                            <div class="btn-group">
+                                <button type="submit" name="accion" value="generar_certificados" 
+                                        class="btn btn-success"
+                                        onclick="return confirm('¿Está seguro de generar los certificados para los participantes seleccionados?')">
+                                    ✨ Generar Certificados
                                 </button>
-                                <span style="color: #666; font-size: 0.9rem;" id="contador-info">
-                                    Seleccione participantes y una acción
-                                </span>
-                            </div>
-
-                            <!-- Table -->
-                            <div class="table-responsive">
-                                <table>
-                                    <thead>
-                                        <tr>
-                                            <th>
-                                                <input type="checkbox" id="select-all" onchange="toggleAllCheckboxes()">
-                                            </th>
-                                            <th>Nombre Completo</th>
-                                            <th>Identificación</th>
-                                            <th>Rol</th>
-                                            <th>Estado Certificado</th>
-                                            <th>Plantilla</th>
-                                            <th>Acciones</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <?php foreach ($participantes as $participante): ?>
-                                            <tr>
-                                                <td>
-                                                    <input type="checkbox" name="participantes[]" 
-                                                           value="<?php echo $participante['id']; ?>"
-                                                           class="participante-checkbox">
-                                                </td>
-                                                <td>
-                                                    <div class="participant-name">
-                                                        <?php echo htmlspecialchars($participante['nombres'] . ' ' . $participante['apellidos']); ?>
-                                                    </div>
-                                                    <div class="participant-email">
-                                                        <?php echo htmlspecialchars($participante['correo_electronico']); ?>
-                                                    </div>
-                                                </td>
-                                                <td>
-                                                    <div class="participant-id">
-                                                        <?php echo htmlspecialchars($participante['numero_identificacion']); ?>
-                                                    </div>
-                                                </td>
-                                                <td>
-                                                    <span class="badge badge-info">
-                                                        <?php echo htmlspecialchars(ucfirst($participante['rol'])); ?>
-                                                    </span>
-                                                </td>
-                                                <td>
-                                                    <?php if ($participante['certificado_id']): ?>
-                                                        <span class="badge badge-success">✅ Generado</span>
-                                                        <br>
-                                                        <small style="color: #718096; font-size: 0.75rem; margin-top: 0.25rem; display: block;">
-                                                            <?php echo date('d/m/Y H:i', strtotime($participante['fecha_generacion'])); ?>
-                                                        </small>
-                                                    <?php else: ?>
-                                                        <span class="badge badge-warning">⏳ Pendiente</span>
-                                                    <?php endif; ?>
-                                                </td>
-                                                <td>
-                                                    <?php if ($participante['plantillas_disponibles'] > 0): ?>
-                                                        <span class="badge badge-success">✅ Disponible</span>
-                                                    <?php else: ?>
-                                                        <span class="badge badge-danger">❌ Sin plantilla</span>
-                                                    <?php endif; ?>
-                                                </td>
-                                                <td>
-                                                    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                                                        <?php if ($participante['certificado_id']): ?>
-                                                            <a href="descargar.php?id=<?php echo $participante['certificado_id']; ?>" 
-                                                               class="btn btn-sm btn-primary" target="_blank" title="Descargar certificado">
-                                                                📥 Descargar
-                                                            </a>
-                                                            <form method="POST" action="" style="display: inline;">
-                                                                <input type="hidden" name="participantes[]" value="<?php echo $participante['id']; ?>">
-                                                                <input type="hidden" name="evento_id" value="<?php echo $evento_id; ?>">
-                                                                <button type="submit" name="accion" value="eliminar_certificados" 
-                                                                        class="btn btn-sm btn-danger"
-                                                                        title="Eliminar certificado"
-                                                                        onclick="return confirm('¿Eliminar el certificado de <?php echo htmlspecialchars($participante['nombres'] . ' ' . $participante['apellidos']); ?>?')">
-                                                                    🗑️ Eliminar
-                                                                </button>
-                                                            </form>
-                                                        <?php else: ?>
-                                                            <form method="POST" action="../participantes/generar_individual.php" style="display: inline;">
-                                                                <input type="hidden" name="participante_id" value="<?php echo $participante['id']; ?>">
-                                                                <button type="submit" class="btn btn-sm btn-success"
-                                                                        title="<?php echo $participante['plantillas_disponibles'] == 0 ? 'Sin plantilla configurada' : 'Generar certificado individual'; ?>"
-                                                                        <?php echo $participante['plantillas_disponibles'] == 0 ? 'disabled' : ''; ?>>
-                                                                    🎓 Generar
-                                                                </button>
-                                                            </form>
-                                                        <?php endif; ?>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        <?php endforeach; ?>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-
-                <!-- Quick Actions -->
-                <div class="card">
-                    <div class="card-header">
-                        ⚡ Acciones Rápidas
-                    </div>
-                    <div class="card-body">
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
-                            <a href="../eventos/plantillas.php?evento_id=<?php echo $evento_id; ?>" class="btn btn-secondary">
-                                🎨 Configurar Plantillas
-                            </a>
-                            <a href="../participantes/agregar.php?evento_id=<?php echo $evento_id; ?>" class="btn btn-success">
-                                ➕ Agregar Participante
-                            </a>
-                            <a href="../participantes/cargar.php" class="btn btn-primary">
-                                📤 Carga Masiva
-                            </a>
-                            <?php
-                            $sin_certificado = count(array_filter($participantes, function($p) { 
-                                return !$p['certificado_id'] && $p['plantillas_disponibles'] > 0; 
-                            }));
-                            if ($sin_certificado > 0):
-                            ?>
-                                <button type="button" class="btn btn-warning" onclick="generarTodosLosCertificados()">
-                                    🎓 Generar Todos (<?php echo $sin_certificado; ?>)
+                                
+                                <button type="submit" name="accion" value="eliminar_certificados" 
+                                        class="btn btn-danger"
+                                        onclick="return confirm('⚠️ ¿Está seguro de eliminar los certificados seleccionados? Esta acción no se puede deshacer.')">
+                                    🗑️ Eliminar Certificados
                                 </button>
-                            <?php endif; ?>
+                            </div>
                         </div>
-                    </div>
+                    </form>
                 </div>
-            <?php endif; ?>
+            </div>
+        <?php elseif ($evento_seleccionado && empty($participantes)): ?>
+            <div class="alert alert-info">
+                ℹ️ Este evento no tiene participantes registrados. 
+                <a href="../participantes/cargar.php?evento_id=<?php echo $evento_id; ?>">Cargar participantes</a>
+            </div>
         <?php endif; ?>
     </div>
-
+    
     <script>
-        // Función para seleccionar/deseleccionar todos los checkboxes
-        function toggleAllCheckboxes() {
-            const selectAll = document.getElementById('select-all');
-            const checkboxes = document.querySelectorAll('input[name="participantes[]"]:not([disabled])');
-            
+        function seleccionarTodos() {
+            const checkboxes = document.querySelectorAll('.participante-checkbox');
+            checkboxes.forEach(checkbox => checkbox.checked = true);
+            actualizarAcciones();
+        }
+        
+        function seleccionarSinCertificado() {
+            const checkboxes = document.querySelectorAll('.participante-checkbox');
             checkboxes.forEach(checkbox => {
-                checkbox.checked = selectAll.checked;
+                const item = checkbox.closest('.participante-item');
+                checkbox.checked = !item.classList.contains('tiene-certificado');
             });
+            actualizarAcciones();
         }
-
-        // Función para confirmar acción masiva
-        function confirmarAccionMasiva() {
-            const accion = document.getElementById('accion').value;
-            const checkboxes = document.querySelectorAll('input[name="participantes[]"]:checked');
-            
-            if (!accion) {
-                alert('❌ Por favor seleccione una acción');
-                return false;
-            }
-            
-            if (checkboxes.length === 0) {
-                alert('❌ Por favor seleccione al menos un participante');
-                return false;
-            }
-            
-            let mensaje = '';
-            switch(accion) {
-                case 'generar_certificados':
-                    mensaje = `¿Está seguro de generar certificados para ${checkboxes.length} participante(s)?`;
-                    break;
-                case 'eliminar_certificados':
-                    mensaje = `¿Está seguro de eliminar certificados de ${checkboxes.length} participante(s)?\n\n⚠️ Esta acción eliminará permanentemente los archivos de certificado.`;
-                    break;
-                default:
-                    mensaje = `¿Está seguro de ejecutar esta acción para ${checkboxes.length} participante(s)?`;
-            }
-            
-            return confirm(mensaje);
+        
+        function limpiarSeleccion() {
+            const checkboxes = document.querySelectorAll('.participante-checkbox');
+            checkboxes.forEach(checkbox => checkbox.checked = false);
+            actualizarAcciones();
         }
-
-        // Función para generar todos los certificados disponibles
-        function generarTodosLosCertificados() {
-            const checkboxes = document.querySelectorAll('input[name="participantes[]"]:not([disabled])');
-            const accionSelect = document.getElementById('accion');
+        
+        function actualizarAcciones() {
+            const checkboxes = document.querySelectorAll('.participante-checkbox:checked');
+            const contador = checkboxes.length;
+            const accionesDiv = document.getElementById('acciones-masivas');
+            const contadorSpan = document.getElementById('contador-seleccionados');
             
-            // Deseleccionar todos primero
-            checkboxes.forEach(checkbox => {
-                checkbox.checked = false;
-            });
-            
-            // Seleccionar solo los que no tienen certificado
-            const participantesSinCertificado = [];
-            checkboxes.forEach(checkbox => {
-                const row = checkbox.closest('tr');
-                const estadoBadge = row.querySelector('.badge-warning');
-                if (estadoBadge && estadoBadge.textContent.includes('Pendiente')) {
-                    checkbox.checked = true;
-                    participantesSinCertificado.push(checkbox);
-                }
-            });
-            
-            if (participantesSinCertificado.length === 0) {
-                alert('❌ No hay participantes sin certificado disponibles para generar');
-                return;
-            }
-            
-            // Seleccionar la acción de generar certificados
-            accionSelect.value = 'generar_certificados';
-            
-            // Confirmar y enviar
-            if (confirm(`¿Está seguro de generar certificados para ${participantesSinCertificado.length} participantes sin certificado?`)) {
-                document.querySelector('form').submit();
+            if (contador > 0) {
+                accionesDiv.classList.add('active');
+                contadorSpan.textContent = `${contador} participante${contador > 1 ? 's' : ''} seleccionado${contador > 1 ? 's' : ''}`;
+            } else {
+                accionesDiv.classList.remove('active');
             }
         }
-
-        // Actualizar contador de seleccionados
-        function actualizarContadorSeleccionados() {
-            const checkboxes = document.querySelectorAll('input[name="participantes[]"]:checked');
-            const contador = document.getElementById('contador-seleccionados');
-            if (contador) {
-                contador.textContent = checkboxes.length;
-            }
-        }
-
-        // Agregar event listeners
+        
+        // Actualizar acciones al cargar la página
         document.addEventListener('DOMContentLoaded', function() {
-            // Event listener para checkboxes individuales
-            const checkboxes = document.querySelectorAll('input[name="participantes[]"]');
-            checkboxes.forEach(checkbox => {
-                checkbox.addEventListener('change', function() {
-                    // Actualizar estado del checkbox "seleccionar todos"
-                    const selectAll = document.getElementById('select-all');
-                    const checkboxesActivos = document.querySelectorAll('input[name="participantes[]"]');
-                    const checkboxesSeleccionados = document.querySelectorAll('input[name="participantes[]"]:checked');
-                    
-                    selectAll.checked = checkboxesActivos.length === checkboxesSeleccionados.length && checkboxesActivos.length > 0;
-                    selectAll.indeterminate = checkboxesSeleccionados.length > 0 && checkboxesActivos.length !== checkboxesSeleccionados.length;
-                    
-                    actualizarContadorSeleccionados();
-                });
-            });
-
-            // Auto-scroll hacia la tabla si hay evento seleccionado
-            const eventoId = new URLSearchParams(window.location.search).get('evento_id');
-            if (eventoId && document.querySelector('.table-responsive')) {
-                setTimeout(() => {
-                    document.querySelector('.table-responsive').scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'start'
-                    });
-                }, 100);
-            }
-
-            // Inicializar contador
-            actualizarContadorSeleccionados();
-        });
-
-        // Función para mostrar preview del certificado (opcional)
-        function previewCertificado(participanteId) {
-            // Esta función se puede implementar para mostrar un preview
-            console.log('Preview certificado para participante:', participanteId);
-        }
-
-        // Función para validar plantillas antes de generar
-        function validarPlantillas() {
-            const participantesSinPlantilla = document.querySelectorAll('tr').length;
-            // Implementar validación de plantillas si es necesario
-        }
-
-        // Notificaciones toast (opcional)
-        function mostrarNotificacion(mensaje, tipo = 'info') {
-            // Implementar sistema de notificaciones toast si se desea
-            console.log(`${tipo.toUpperCase()}: ${mensaje}`);
-        }
-
-        // Función para recargar datos sin refresh completo (opcional)
-        function recargarDatos() {
-            const eventoId = document.getElementById('evento_id').value;
-            if (eventoId) {
-                window.location.href = `generar.php?evento_id=${eventoId}`;
-            }
-        }
-
-        // Keyboard shortcuts
-        document.addEventListener('keydown', function(e) {
-            // Ctrl/Cmd + A para seleccionar todos
-            if ((e.ctrlKey || e.metaKey) && e.key === 'a' && e.target.type !== 'text') {
-                e.preventDefault();
-                document.getElementById('select-all').click();
-            }
-            
-            // Escape para deseleccionar todos
-            if (e.key === 'Escape') {
-                document.getElementById('select-all').checked = false;
-                toggleAllCheckboxes();
-            }
+            actualizarAcciones();
         });
     </script>
 </body>

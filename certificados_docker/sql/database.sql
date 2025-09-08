@@ -4,11 +4,11 @@
 -- ===============================================
 
 -- Crear base de datos
-CREATE DATABASE IF NOT EXISTS certificados_idexud 
+CREATE DATABASE IF NOT EXISTS certificaciones_ofex_db 
 CHARACTER SET utf8mb4 
 COLLATE utf8mb4_unicode_ci;
 
-USE certificados_idexud;
+USE certificaciones_ofex_db;
 
 -- ===============================================
 -- 1. TABLA DE USUARIOS
@@ -411,7 +411,7 @@ INSERT INTO usuarios (username, password, nombre, email, rol) VALUES
 -- ===============================================
 
 -- Mostrar resumen simple
-SELECT 'Base de datos certificados_idexud creada exitosamente' as estado, NOW() as fecha_creacion;
+SELECT 'Base de datos certificaciones_ofex_db creada exitosamente' as estado, NOW() as fecha_creacion;
 
 -- Mostrar todas las tablas creadas
 SHOW TABLES;
